@@ -1,0 +1,1040 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { getPulse, placeCall } from "@/lib/pulse/api";
+import { formatClock, formatPct, formatPrice, formatPts, formatSignedPts, formatUtc, sideLabel } from "@/lib/pulse/format";
+import { stakesFor, type LengthMin, type Side } from "@/lib/pulse/math";
+import { haptic, useReducedMotion } from "@/lib/pulse/telegram";
+import type { MarketSnap, PulseSnapshot, SettledCall } from "@/lib/pulse/types";
+import { Art, Mark, PixelBar, PriceLine, SignInBlock, TickText, Wordmark } from "./chrome";
+import { ShareActions } from "./share";
+import { LineReplay, Welcome, ButterflyLoad } from "./welcome";
+
+const REASON: Record<string, string> = {
+  locked: "MARKET LOCKED.",
+  balance: "NOT ENOUGH POINTS.",
+  already: "CALL ALREADY IN.",
+  closed: "MARKET CLOSED.",
+  unavailable: "MARKET UNAVAILABLE.",
+  rejected: "COULD NOT LOCK IN.",
+  stale: "PRICE DELAYED. CALLS PAUSED.",
+};
+
+function useCrowdMotion(participants: number, upPool: number, downPool: number, reduced: boolean) {
+  const prev = useRef({ participants, upPool, downPool, ready: false });
+  const timer = useRef<number | null>(null);
+  const [count, setCount] = useState(participants);
+  const [dropSide, setDropSide] = useState<"up" | "down" | null>(null);
+  const [dropKey, setDropKey] = useState(0);
+
+  useEffect(() => {
+    const past = prev.current;
+    if (!past.ready) {
+      prev.current = { participants, upPool, downPool, ready: true };
+      setCount(participants);
+      return;
+    }
+    const joined = participants > past.participants || upPool > past.upPool || downPool > past.downPool;
+    if (joined) {
+      if (!reduced) {
+        setDropSide(upPool > past.upPool ? "up" : "down");
+        setDropKey((key) => key + 1);
+      }
+      if (timer.current) window.clearInterval(timer.current);
+      if (reduced || participants <= past.participants) {
+        setCount(participants);
+      } else {
+        let n = past.participants;
+        timer.current = window.setInterval(() => {
+          n += 1;
+          setCount(n);
+          if (n >= participants && timer.current) {
+            window.clearInterval(timer.current);
+            timer.current = null;
+          }
+        }, 50);
+      }
+    } else if (participants !== past.participants) {
+      setCount(participants);
+    }
+    prev.current = { participants, upPool, downPool, ready: true };
+    return () => {
+      if (timer.current) window.clearInterval(timer.current);
+    };
+  }, [participants, upPool, downPool, reduced]);
+
+  return { count, dropSide, dropKey };
+}
+
+const INTRO_KEY = "pulse-intro-v3";
+const SIDE_KEY = "pulse-last-side";
+
+export function PredictScreen() {
+  const { user, isPending } = useCurrentUserState();
+  const reduced = useReducedMotion();
+  const q = useQuery({
+    queryKey: ["pulse", user?.id ?? "anon"],
+    queryFn: () => getPulse(),
+    refetchInterval: 2000,
+  });
+  const opened = useRef(0);
+  const released = useRef(false);
+  const [intro, setIntro] = useState(true);
+  const [cover, setCover] = useState<"on" | "out" | "off">("on");
+  const [slow, setSlow] = useState(false);
+  const [tint, setTint] = useState<"none" | "up" | "down">("none");
+  const [stuck, setStuck] = useState(false);
+
+  useEffect(() => {
+    opened.current = performance.now();
+    try {
+      if (localStorage.getItem(INTRO_KEY) === "1") setIntro(false);
+      const saved = localStorage.getItem(SIDE_KEY);
+      if (saved === "up" || saved === "down") setTint(saved);
+    } catch {
+      /* welcome stays up */
+    }
+    const slowTimer = window.setTimeout(() => setSlow(true), 8000);
+    const failTimer = window.setTimeout(() => setStuck(true), 5000);
+    return () => {
+      window.clearTimeout(slowTimer);
+      window.clearTimeout(failTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const snap = q.data;
+    if (!snap) return;
+    const side = snap.me?.holds[0]?.side ?? snap.recent?.side ?? null;
+    try {
+      if (side) localStorage.setItem(SIDE_KEY, side);
+      else localStorage.removeItem(SIDE_KEY);
+    } catch {
+      /* ignore */
+    }
+    if (side) setTint(side);
+  }, [q.data]);
+
+  const ready = !!q.data;
+  useEffect(() => {
+    if (released.current || intro !== false || !ready) return;
+    const min = reduced ? 0 : 1200;
+    const wait = Math.max(0, min - (performance.now() - opened.current));
+    const t = window.setTimeout(() => {
+      released.current = true;
+      setCover("out");
+    }, wait);
+    return () => window.clearTimeout(t);
+  }, [intro, ready, reduced]);
+
+  useEffect(() => {
+    if (cover !== "out") return;
+    const t = window.setTimeout(() => setCover("off"), reduced ? 0 : 420);
+    return () => window.clearTimeout(t);
+  }, [cover, reduced]);
+
+  const failed = stuck && q.isError && !q.isFetching && !q.data;
+  const showMarket = ready && intro === false;
+  const showButterfly = intro !== true && cover !== "off" && !failed;
+
+  if (intro) {
+    return (
+      <Welcome
+        onDone={() => {
+          try {
+            localStorage.setItem(INTRO_KEY, "1");
+          } catch {
+            /* ignore */
+          }
+          setIntro(false);
+        }}
+      />
+    );
+  }
+
+  return (
+    <>
+      {showMarket && q.data ? (
+        <div aria-hidden={cover === "on"} className={cover === "on" ? "invisible" : undefined}>
+          <PredictBody
+            snap={q.data}
+            receivedAt={q.dataUpdatedAt}
+            authPending={isPending}
+            signedIn={!!user}
+            updating={q.isFetching}
+          />
+        </div>
+      ) : null}
+      {failed ? (
+        <StatusArt
+          src="/pulse/signal.jpg"
+          kicker="MARKET UNAVAILABLE"
+          title="NO SIGNAL."
+          action={{ label: "RETRY", onClick: () => void q.refetch() }}
+        />
+      ) : null}
+      {showButterfly ? (
+        <div className={`transition-opacity duration-500 ${cover === "out" ? "pointer-events-none opacity-0" : "opacity-100"}`}>
+          <ButterflyLoad tint={user ? tint : "none"} slow={slow && !q.data} />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function PredictBody({
+  snap,
+  receivedAt,
+  authPending,
+  signedIn,
+  updating,
+}: {
+  snap: PulseSnapshot;
+  receivedAt: number;
+  authPending: boolean;
+  signedIn: boolean;
+  updating: boolean;
+}) {
+  const [length, setLength] = useState<LengthMin>(15);
+  const [now, setNow] = useState(() => Date.now());
+  const [dismissed, setDismissed] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem("pulse-dismiss");
+    } catch {
+      return null;
+    }
+  });
+  const [announce, setAnnounce] = useState("");
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, []);
+  const serverNow = Date.parse(snap.serverNow) + (now - receivedAt);
+  const markets = snap.markets?.length ? snap.markets : snap.market ? [snap.market] : [];
+  const market = markets.find((m) => m.lengthMin === length) ?? markets[0] ?? null;
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (!market || market.price == null) return;
+      const closeMs = Date.parse(market.closesAt) - (Date.parse(snap.serverNow) + (Date.now() - receivedAt));
+      setAnnounce(`Bitcoin ${formatPrice(market.price)}. Closes in ${formatClock(closeMs)}.`);
+    }, 15000);
+    return () => window.clearInterval(id);
+  }, [market, snap.serverNow, receivedAt]);
+
+  if (!market) {
+    return <StatusArt src="/pulse/signal.jpg" kicker="MARKET UNAVAILABLE" title="NO SIGNAL." action={null} />;
+  }
+
+  if (snap.settling) {
+    return (
+      <section>
+        <Header points={snap.me?.points ?? null} inPlay={snap.me?.inPlay ?? 0} authPending={authPending} signedIn={signedIn} market={market} />
+        <div className="relative mt-8 overflow-hidden border border-line">
+          <div className="scan-line absolute inset-x-0 top-0 h-px bg-fg" />
+          <div className="px-4 py-8">
+            <p className="font-mono text-meta text-secondary">VERIFYING RESULT</p>
+            <h1 className="mt-3 font-display text-title">WAITING ON THE CLOSE.</h1>
+            <p className="mt-6 font-mono text-meta text-secondary">
+              {snap.settling.code} · BTC/USD · {sideLabel(snap.settling.side)} · {formatPts(snap.settling.stake)}
+            </p>
+            {snap.settling.openPrice != null ? (
+              <p className="mt-2 font-mono text-meta text-secondary">OPEN {formatPrice(snap.settling.openPrice)}</p>
+            ) : null}
+            {snap.settling.source ? (
+              <p className="mt-2 font-mono text-meta text-muted">{snap.settling.source}</p>
+            ) : null}
+          </div>
+        </div>
+        <p className="sr-only" aria-live="polite">
+          Verifying result for {snap.settling.code}.
+        </p>
+      </section>
+    );
+  }
+
+  if (snap.recent && dismissed !== snap.recent.code && snap.recent.code !== market.code) {
+    return (
+      <ResultView
+        call={snap.recent}
+        onNext={() => {
+          setDismissed(snap.recent!.code);
+          sessionStorage.setItem("pulse-dismiss", snap.recent!.code);
+        }}
+      />
+    );
+  }
+
+  return (
+    <LiveMarket
+      snap={snap}
+      market={market}
+      markets={markets}
+      length={market.lengthMin}
+      onLength={setLength}
+      serverNow={serverNow}
+      authPending={authPending}
+      signedIn={signedIn}
+      announce={announce}
+      updating={updating}
+    />
+  );
+}
+
+function LiveMarket({
+  snap,
+  market,
+  markets,
+  length,
+  onLength,
+  serverNow,
+  authPending,
+  signedIn,
+  announce,
+  updating,
+}: {
+  snap: PulseSnapshot;
+  market: MarketSnap;
+  markets: MarketSnap[];
+  length: LengthMin;
+  onLength: (length: LengthMin) => void;
+  serverNow: number;
+  authPending: boolean;
+  signedIn: boolean;
+  announce: string;
+  updating: boolean;
+}) {
+  const qc = useQueryClient();
+  const reduced = useReducedMotion();
+  const [side, setSide] = useState<Side | null>(null);
+  const [stake, setStake] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [phase, setPhase] = useState<"idle" | "print" | "hold" | "tear">("idle");
+  const [lit, setLit] = useState<number | null>(null);
+  const [replay, setReplay] = useState(false);
+  const stageRef = useRef<HTMLElement>(null);
+  const fxRef = useRef<HTMLCanvasElement>(null);
+  const frozen = useRef<MarketSnap | null>(null);
+  const shown = phase === "idle" ? market : (frozen.current ?? market);
+  const closeMs = Date.parse(market.closesAt) - serverNow;
+  const lockMs = Date.parse(market.locksAt) - serverNow;
+  const urgentLimit = length === 1 ? 10000 : 60000;
+  const urgent = market.status === "open" ? lockMs < urgentLimit : closeMs < urgentLimit;
+  const locked = market.status !== "open" || snap.priceAgeMs > 2000;
+  const total = shown.upPool + shown.downPool;
+  const upPct = total > 0 ? (shown.upPool / total) * 100 : 0;
+  const price = market.price;
+  const open = market.openPrice;
+  const change = price != null && open != null && open !== 0 ? ((price - open) / open) * 100 : null;
+  const points = snap.me?.points ?? null;
+
+  useEffect(() => {
+    if (phase !== "print") return;
+    haptic("confirm");
+    const t1 = window.setTimeout(() => setPhase("hold"), reduced ? 0 : 250);
+    const t2 = window.setTimeout(() => setPhase("tear"), reduced ? 0 : 550);
+    const t3 = window.setTimeout(() => {
+      frozen.current = null;
+      setPhase("idle");
+    }, reduced ? 0 : 1700);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      window.clearTimeout(t3);
+    };
+  }, [phase, reduced]);
+
+  useEffect(() => {
+    if (phase !== "tear" || reduced) return;
+    const root = stageRef.current;
+    const canvas = fxRef.current;
+    const body = root?.querySelector("[data-ticket-body]");
+    if (!root || !canvas || !(body instanceof HTMLElement)) return;
+    let stop = () => {};
+    let dead = false;
+    void import("@/lib/pulse/motion").then((motion) => {
+      if (dead) return;
+      const poof = new motion.TicketPoof(canvas);
+      stop = motion.watch((t: number) => {
+        poof.update(t);
+        poof.render();
+      });
+      const src = box(body, root);
+      const cells = [...root.querySelectorAll<HTMLElement>("[data-cell]")];
+      const ups = cells.filter((cell) => cell.dataset.side === "up");
+      const downs = cells.filter((cell) => cell.dataset.side === "down");
+      const cell =
+        side === "down"
+          ? (downs[1] ?? downs[0] ?? cells[cells.length - 1])
+          : (ups[Math.max(0, ups.length - 2)] ?? ups.at(-1) ?? cells[0]);
+      if (!cell) return;
+      poof.poof(src, box(cell, root), "#F1F0EA", () => {
+        const idx = Number(cell.dataset.cell);
+        if (!Number.isNaN(idx)) setLit(idx);
+      });
+    });
+    return () => {
+      dead = true;
+      stop();
+    };
+  }, [phase, reduced, side]);
+
+  const position = snap.me?.holds?.find((hold) => hold.code === market.code) ?? null;
+  const activity = snap.activities?.find((row) => row.code === market.code)?.items ?? snap.activity;
+  const stale = snap.priceAgeMs > 2000;
+  const crowd = useCrowdMotion(shown.participants, shown.upPool, shown.downPool, reduced);
+
+  async function submit() {
+    if (!side || !stake || locked || busy) return;
+    setBusy(true);
+    setNote(null);
+    frozen.current = market;
+    const res = await placeCall({ data: { side, stake, code: market.code } }).catch(() => null);
+    setBusy(false);
+    if (!res || !res.ok) {
+      frozen.current = null;
+      setNote(res && !res.ok ? REASON[res.reason] : "COULD NOT LOCK IN.");
+      return;
+    }
+    await qc.invalidateQueries({ queryKey: ["pulse"] });
+    setPhase("print");
+  }
+
+  return (
+    <section ref={stageRef} className="relative pb-8">
+      <canvas ref={fxRef} className="pointer-events-none absolute inset-0 z-20 h-full w-full" aria-hidden />
+      {replay ? <LineReplay onClose={() => setReplay(false)} /> : null}
+      <Header
+        points={points}
+        inPlay={snap.me?.inPlay ?? 0}
+        authPending={authPending}
+        signedIn={signedIn}
+        market={market}
+        feed={snap.feed}
+        onReplay={() => setReplay(true)}
+      />
+      <MarketRows markets={markets} length={length} onLength={onLength} serverNow={serverNow} holds={snap.me?.holds ?? []} />
+      <div className="md:grid md:grid-cols-2 md:items-start md:gap-12">
+      <div>
+      <div className="relative mt-5">
+        <div className="pointer-events-none absolute inset-x-0 top-7 h-16">
+          <PriceLine samples={market.samples} urgent={urgent && market.status !== "settling"} />
+        </div>
+        <p className="relative font-mono text-meta text-secondary">BTC / USD</p>
+        {price != null ? (
+          <>
+            <TickText value={formatPrice(price)} className="relative text-price text-fg [&>span]:bg-bg" />
+            <p className="sr-only">Bitcoin {formatPrice(price)}</p>
+          </>
+        ) : (
+          <p className="font-display text-price text-muted" aria-hidden>
+            ——,———.——
+          </p>
+        )}
+        {change != null ? (
+          <p className={`relative mt-2 w-fit bg-bg font-mono text-meta ${change > 0 ? "text-up" : change < 0 ? "text-pulse" : "text-secondary"}`}>
+            {change > 0 ? "▲ " : change < 0 ? "▼ " : ""}
+            {formatPct(change)}
+            <span className="sr-only">{change > 0 ? " up" : change < 0 ? " down" : ""}</span>
+          </p>
+        ) : null}
+        <p className="relative mt-2 w-fit bg-bg font-mono text-meta text-secondary">
+          PRICE {(snap.priceAgeMs / 1000).toFixed(1)}s AGO
+          {updating ? <span className="ml-3">UPDATING</span> : null}
+        </p>
+      </div>
+
+      <div className="mt-6">
+        <p className="font-mono text-meta text-secondary">MARKET CLOSE</p>
+        <TickText value={formatClock(closeMs)} className={`text-clock ${urgent ? "text-pulse" : "text-fg"}`} />
+        <p className="sr-only">Closes in {formatClock(closeMs)}</p>
+        {market.status === "open" ? (
+          <p className={`mt-2 font-mono text-meta ${urgent ? "text-pulse" : "text-secondary"}`}>
+            LOCKS IN {formatClock(lockMs)}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="mt-4 flex items-baseline justify-between gap-3 font-mono text-meta">
+        <span className="text-secondary">{open != null ? `OPEN ${formatPrice(open)}` : "OPEN —"}</span>
+        <span className="text-secondary">
+          {snap.feed === "reconnecting" ? "RECONNECTING" : market.source ?? ""}
+        </span>
+      </div>
+      <p className="sr-only" aria-live="polite">
+        {announce}
+      </p>
+
+      {stale ? (
+        <p className="mt-6 border-t border-pulse pt-3 font-mono text-meta text-pulse">PRICE DELAYED. CALLS PAUSED.</p>
+      ) : locked ? (
+        <p className="mt-6 border-t border-pulse pt-3 font-mono text-meta text-pulse">
+          {market.status === "open" ? "TOO LATE. MARKET LOCKED." : "MARKET LOCKED. WAITING ON CLOSE."}
+        </p>
+      ) : null}
+
+      <div className="mt-6">
+        <Mark n="01" label="THE CROWD" />
+        <PixelBar upPct={upPct} empty={total === 0} dropSide={crowd.dropSide} dropKey={crowd.dropKey} litIndex={lit} />
+        <p className="mt-3 font-mono text-meta text-fg">
+          {total === 0
+            ? "WAITING ON THE FIRST CALL"
+            : `${crowd.count.toLocaleString("en-US")} IN · ${Math.round(upPct)}% OF POOL UP`}
+          {total > 0 && shown.participants < 5 ? " · SMALL POOL" : ""}
+        </p>
+        <dl className="mt-4 grid grid-cols-3 gap-2 border-t border-line-soft pt-3">
+          <PoolStat label="UP ↑" value={formatPts(shown.upPool)} />
+          <PoolStat label="DOWN ↓" value={formatPts(shown.downPool)} />
+          <PoolStat label="TOTAL" value={formatPts(total)} />
+        </dl>
+      </div>
+      </div>
+
+      <div className="mt-6">
+        <Mark n="02" label="YOUR CALL" />
+        {position && phase === "idle" ? (
+          <PositionCard market={market} position={position} />
+        ) : phase !== "idle" && side && stake ? (
+          <div className={phase === "tear" && reduced ? "ticket-tear" : "ticket-print"}>
+            <Ticket
+              market={market}
+              side={side}
+              stake={stake}
+              share={position?.share}
+              est={position?.estReturn}
+              serial={position?.serial ?? "SN-·····"}
+              hideBody={phase === "tear" && !reduced}
+            />
+          </div>
+        ) : (
+          <CallForm
+            market={market}
+            side={side}
+            stake={stake}
+            points={points}
+            locked={locked}
+            busy={busy}
+            signedIn={signedIn}
+            authPending={authPending}
+            note={note}
+            onSide={(next) => {
+              haptic("select");
+              setSide(next);
+            }}
+            onStake={(next) => {
+              haptic("select");
+              setStake(next);
+            }}
+            length={length}
+            stale={stale}
+            onSubmit={() => void submit()}
+          />
+        )}
+        {signedIn && points != null && points < 10 && (snap.me?.inPlay ?? 0) === 0 ? (
+          <p className="mt-3 font-mono text-meta text-pulse">OUT OF POINTS. BACK TOMORROW WITH 1,000.</p>
+        ) : null}
+      </div>
+      </div>
+
+      <div className="mt-8 pb-4">
+        <Mark n="03" label="LIVE" />
+        {activity.length === 0 ? (
+          <p className="font-mono text-meta text-secondary">NO CALLS ON THIS MARKET.</p>
+        ) : (
+          <ul>
+            {activity.map((item, i) => (
+              <li
+                key={`${item.at}-${item.username}-${i}`}
+                className="flex items-baseline justify-between border-b border-line-soft py-3 font-mono text-meta"
+              >
+                <span className="text-fg">@{item.username}</span>
+                <span className={item.side === "up" ? "text-up" : "text-pulse"}>
+                  {sideLabel(item.side)}
+                  <span className="ml-3 text-secondary">{item.stake.toLocaleString("en-US")}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function Header({
+  points,
+  inPlay,
+  authPending,
+  signedIn,
+  market,
+  feed,
+  onReplay,
+}: {
+  points: number | null;
+  inPlay: number;
+  authPending: boolean;
+  signedIn: boolean;
+  market?: MarketSnap | null;
+  feed?: string;
+  onReplay?: () => void;
+}) {
+  return (
+    <header>
+      <div className="flex items-baseline justify-between gap-3">
+        <Wordmark onReplay={onReplay} />
+        <div className="text-right">
+          <p className="font-display text-base tabular-nums">
+            {authPending || (signedIn && points == null) ? (
+              <span className="text-secondary">···· PTS</span>
+            ) : signedIn && points != null ? (
+              formatPts(points)
+            ) : (
+              <a href="/login" className="font-mono text-meta text-secondary">
+                SIGN IN
+              </a>
+            )}
+          </p>
+          {inPlay > 0 ? <p className="font-mono text-meta text-secondary">IN PLAY {inPlay.toLocaleString("en-US")}</p> : null}
+        </div>
+      </div>
+      <p className="mt-2 font-mono text-meta text-secondary">
+        BTC/USD
+        {market ? ` · ${market.code} · ${market.lengthMin}M` : ""}
+        {feed === "reconnecting" ? " · RECONNECTING" : ""}
+      </p>
+    </header>
+  );
+}
+
+function MarketRows({
+  markets,
+  length,
+  onLength,
+  serverNow,
+  holds,
+}: {
+  markets: MarketSnap[];
+  length: LengthMin;
+  onLength: (length: LengthMin) => void;
+  serverNow: number;
+  holds: { code: string }[];
+}) {
+  return (
+    <div className="mt-4 border-t border-line md:grid md:grid-cols-3 md:border-t-0">
+      {([1, 5, 15] as const).map((len) => {
+        const row = markets.find((m) => m.lengthMin === len);
+        const close = row ? Date.parse(row.closesAt) - serverNow : 0;
+        const total = row ? row.upPool + row.downPool : 0;
+        const up = total > 0 ? (row!.upPool / total) * 100 : 0;
+        const held = row ? holds.some((h) => h.code === row.code) : false;
+        const active = length === len;
+        return (
+          <button
+            key={len}
+            type="button"
+            onClick={() => onLength(len)}
+            className={`flex min-h-16 w-full items-center gap-3 border-b border-line py-3 text-left md:border md:px-3 ${
+              active ? "text-fg md:border-fg" : "text-secondary md:border-line"
+            }`}
+          >
+            <span className="w-16 shrink-0 font-mono text-meta">
+              {len}M{len === 1 ? " FAST" : ""}
+            </span>
+            <span className="w-14 shrink-0 font-display text-xl tabular-nums">{row ? formatClock(close) : "--:--"}</span>
+            <span className="min-w-0 flex-1">
+              <PixelBar upPct={up} empty={!row || total === 0} calm />
+            </span>
+            <span className="shrink-0 font-mono text-meta">{held ? "LIVE" : ""}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PoolStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="font-mono text-meta text-secondary">{label}</dt>
+      <dd className="mt-1 font-display text-sm tabular-nums">{value.replace(" PTS", "")}</dd>
+    </div>
+  );
+}
+
+function CallForm({
+  market,
+  side,
+  stake,
+  points,
+  locked,
+  busy,
+  signedIn,
+  authPending,
+  note,
+  onSide,
+  onStake,
+  length,
+  stale,
+  onSubmit,
+}: {
+  market: MarketSnap;
+  side: Side | null;
+  stake: number | null;
+  points: number | null;
+  locked: boolean;
+  busy: boolean;
+  signedIn: boolean;
+  authPending: boolean;
+  note: string | null;
+  onSide: (s: Side) => void;
+  onStake: (n: number) => void;
+  length: LengthMin;
+  stale: boolean;
+  onSubmit: () => void;
+}) {
+  const total = market.upPool + market.downPool;
+  const upPct = total > 0 ? Math.round((market.upPool / total) * 100) : null;
+  const downPct = upPct == null ? null : 100 - upPct;
+  return (
+    <div>
+      <div className="grid grid-cols-2 gap-2">
+        <SideButton
+          side="up"
+          pct={upPct}
+          pool={market.upPool}
+          selected={side === "up"}
+          disabled={locked}
+          onClick={() => onSide("up")}
+        />
+        <SideButton
+          side="down"
+          pct={downPct}
+          pool={market.downPool}
+          selected={side === "down"}
+          disabled={locked}
+          onClick={() => onSide("down")}
+        />
+      </div>
+      <div className="mt-3 grid grid-cols-5 gap-2" role="group" aria-label="Stake">
+        {stakesFor(length).map((n) => {
+          const poor = points != null && n > points;
+          const selected = stake === n;
+          return (
+            <button
+              key={n}
+              type="button"
+              disabled={locked || poor || stale}
+              aria-pressed={selected}
+              onClick={() => onStake(n)}
+              className={`h-11 font-display text-sm tabular-nums ${
+                selected
+                  ? "bg-fg text-bg"
+                  : poor || locked
+                    ? "border border-line-soft text-muted"
+                    : "border border-line text-fg"
+              }`}
+            >
+              {n}
+            </button>
+          );
+        })}
+      </div>
+      {points != null || signedIn ? (
+        <p className="mt-3 font-mono text-meta text-secondary">
+          {points != null ? `BALANCE ${formatPts(points)}` : "BALANCE ····"}
+        </p>
+      ) : null}
+      {signedIn ? (
+        <button
+          type="button"
+          disabled={locked || busy || !side || !stake || authPending}
+          onClick={onSubmit}
+          className="mt-4 h-12 w-full bg-fg font-display text-base tracking-tight text-bg disabled:bg-elevated disabled:text-muted"
+        >
+          {busy ? "LOCKING IN…" : "MAKE YOUR CALL"}
+        </button>
+      ) : (
+        <a
+          href="/login"
+          className="mt-4 grid h-12 place-items-center bg-fg font-display text-base tracking-tight text-bg"
+        >
+          SIGN IN TO CALL
+        </a>
+      )}
+      {note ? <p className="mt-3 font-mono text-meta text-pulse">{note}</p> : null}
+    </div>
+  );
+}
+
+function SideButton({
+  side,
+  pct,
+  pool,
+  selected,
+  disabled,
+  onClick,
+}: {
+  side: Side;
+  pct: number | null;
+  pool: number;
+  selected: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const up = side === "up";
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-pressed={selected}
+      onClick={onClick}
+      className={`flex min-h-32 flex-col justify-end border px-3 py-4 text-left disabled:text-muted ${
+        selected
+          ? up
+            ? "border-up bg-up text-bg"
+            : "border-down bg-down text-fg"
+          : "border-line text-fg"
+      }`}
+    >
+      <span className="font-display text-4xl font-bold leading-none tracking-tight">
+        {up ? "UP" : "DOWN"}
+        <span
+          className={`inline-block ${
+            selected ? (up ? "motion-safe:-translate-y-0.5" : "motion-safe:translate-y-0.5") : ""
+          }`}
+        >
+          {up ? " ↑" : " ↓"}
+        </span>
+      </span>
+      <span className={`mt-3 block font-mono text-meta ${selected && up ? "text-bg" : "text-secondary"}`}>
+        {pct == null ? "—" : `${pct}%`} · {pool.toLocaleString("en-US")}
+      </span>
+      {selected ? (
+        <span className={`mt-2 block font-mono text-meta ${selected && up ? "text-bg" : "text-fg"}`}>SELECTED</span>
+      ) : null}
+    </button>
+  );
+}
+
+function box(el: HTMLElement, root: HTMLElement) {
+  const a = root.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  return { x: r.left - a.left, y: r.top - a.top, w: r.width, h: r.height };
+}
+
+function PositionCard({
+  market,
+  position,
+}: {
+  market: MarketSnap;
+  position: NonNullable<PulseSnapshot["me"]>["position"];
+}) {
+  if (!position) return null;
+  return (
+    <div>
+      <Ticket
+        market={market}
+        side={position.side}
+        stake={position.stake}
+        share={position.share}
+        est={position.estReturn}
+        serial={position.serial}
+        steady
+      />
+      <ShareActions
+        spec={{
+          kind: "call",
+          code: market.code,
+          side: position.side,
+          openPrice: market.openPrice,
+          stake: position.stake,
+        }}
+      />
+    </div>
+  );
+}
+
+function Ticket({
+  market,
+  side,
+  stake,
+  share,
+  est,
+  serial,
+  steady,
+  hideBody,
+}: {
+  market: MarketSnap;
+  side: Side;
+  stake: number;
+  share?: number;
+  est?: number;
+  serial: string;
+  steady?: boolean;
+  hideBody?: boolean;
+}) {
+  const up = side === "up";
+  return (
+    <article className={`relative border bg-surface ${steady ? "border-line" : "border-line"}`}>
+      <span className="absolute -top-2 left-16 size-4 -translate-x-1/2 rounded-full border border-line bg-bg" aria-hidden />
+      <span className="absolute -bottom-2 left-16 size-4 -translate-x-1/2 rounded-full border border-line bg-bg" aria-hidden />
+      <div className="grid grid-cols-[3.5rem_1fr_1.75rem]">
+        <div className="flex items-center justify-center border-r border-dashed border-line">
+          <span className="rotate-180 font-mono text-meta text-secondary [writing-mode:vertical-rl]">PULSE</span>
+        </div>
+        <div data-ticket-body className={`px-3 py-4 ${hideBody ? "invisible" : ""}`}>
+          <div className="flex items-start justify-between gap-2">
+            <p className="font-mono text-meta text-secondary">
+              PULSE / {market.code}
+            </p>
+            <p className="font-mono text-meta text-muted">{serial}</p>
+          </div>
+          <p className="mt-3 font-mono text-meta text-secondary">BTC / USD</p>
+          <p className={`mt-1 font-display text-3xl tracking-tight ${up ? "text-up" : "text-pulse"}`}>
+            {sideLabel(side)}
+          </p>
+          <p className="mt-2 font-display text-xl tabular-nums">{formatPts(stake)}</p>
+          <dl className="mt-4 space-y-1 font-mono text-meta text-secondary">
+            <div className="flex justify-between gap-3">
+              <dt>OPEN</dt>
+              <dd className="text-fg">{market.openPrice != null ? formatPrice(market.openPrice) : "—"}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt>SHARE OF {up ? "UP" : "DOWN"} POOL</dt>
+              <dd className="text-fg">{share != null ? `${share.toFixed(1)}%` : "—"}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt>EST. RETURN IF CLOSED NOW</dt>
+              <dd className="text-fg">{est != null ? `~${formatPts(est)}` : "—"}</dd>
+            </div>
+          </dl>
+          <p className="mt-3 font-mono text-meta text-muted">CHANGES UNTIL CLOSE</p>
+          <p className="mt-3 font-mono text-meta text-fg">{market.status === "open" ? "POSITION ACTIVE" : "POSITION LOCKED"}</p>
+          <div className="barcode mt-4" aria-hidden />
+          <p className="sr-only">Decorative barcode</p>
+        </div>
+        <div className="flex items-center justify-center border-l border-line">
+          <span className="font-mono text-meta text-pulse [writing-mode:vertical-rl]">{market.code}</span>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function ResultView({ call, onNext }: { call: SettledCall; onNext: () => void }) {
+  const reduced = useReducedMotion();
+  const win = call.outcome === "win";
+  const loss = call.outcome === "loss";
+  const draw = call.outcome === "draw";
+  const cancelled = call.outcome === "cancelled";
+  const src = win ? "/pulse/win.jpg" : loss ? "/pulse/loss.jpg" : cancelled ? "/pulse/signal.jpg" : "/pulse/draw.jpg";
+  const title = win
+    ? `CALLED IT. ${formatSignedPts(call.net)}`
+    : loss
+      ? `NOT THIS TIME. ${formatSignedPts(call.net)}`
+      : draw
+        ? "DRAW. STAKE REFUNDED."
+        : cancelled
+          ? "MARKET CANCELLED. STAKE RETURNED."
+          : "VOID. STAKE REFUNDED.";
+  const line = `${call.openPrice != null ? `OPEN ${formatPrice(call.openPrice)}` : "OPEN —"}${
+    call.closePrice != null ? ` → CLOSE ${formatPrice(call.closePrice)}` : ""
+  } · ${formatUtc(call.closesAt)}${call.source ? ` · ${call.source}` : ""}`;
+  const [phase, setPhase] = useState<"black" | "type" | "show">(reduced ? "show" : "black");
+  const [typed, setTyped] = useState(reduced ? line : "");
+
+  useEffect(() => {
+    if (reduced) return;
+    const t = window.setTimeout(() => setPhase("type"), 500);
+    return () => window.clearTimeout(t);
+  }, [reduced]);
+
+  useEffect(() => {
+    if (phase !== "type") return;
+    if (typed.length >= line.length) {
+      const t = window.setTimeout(() => setPhase("show"), 120);
+      return () => window.clearTimeout(t);
+    }
+    const t = window.setTimeout(() => setTyped(line.slice(0, typed.length + 1)), 28);
+    return () => window.clearTimeout(t);
+  }, [phase, typed, line]);
+
+  return (
+    <section className="pb-8">
+      <p className="sr-only">
+        {title}. {line}
+      </p>
+      <Wordmark />
+      {phase === "black" ? <div className="mt-6 min-h-80 bg-bg" /> : null}
+      {phase !== "black" ? (
+        <p className="mt-8 min-h-6 font-mono text-meta text-secondary" aria-hidden>
+          {phase === "show" ? line : typed}
+        </p>
+      ) : null}
+      {phase === "show" ? (
+        <>
+          <div className="mt-4 border border-line">
+            <Art src={src} />
+            <div className={`border-t px-4 py-5 ${win ? "border-up" : "border-line"}`}>
+              <h1 className={`font-display text-title text-balance ${loss ? "text-secondary" : "text-fg"}`}>{title}</h1>
+              {win ? <p className="mt-3 font-mono text-meta text-up">PAYOUT {formatPts(call.payout)}</p> : null}
+              <p className="mt-2 font-mono text-meta text-secondary">
+                {call.code} · {sideLabel(call.side)} · {formatPts(call.stake)}
+              </p>
+            </div>
+          </div>
+          <ShareActions
+            spec={{
+              kind: "result",
+              code: call.code,
+              side: call.side,
+              openPrice: call.openPrice,
+              closePrice: call.closePrice,
+              outcome: call.outcome,
+              net: call.net,
+              stake: call.stake,
+            }}
+          />
+          <button type="button" onClick={onNext} className="mt-3 h-12 w-full bg-fg font-display text-base text-bg">
+            NEXT MARKET
+          </button>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+export function StatusArt({
+  src,
+  kicker,
+  title,
+  action,
+}: {
+  src: string;
+  kicker: string;
+  title: string;
+  action: { label: string; onClick: () => void } | null;
+}) {
+  return (
+    <section className="pb-8">
+      <Wordmark />
+      <div className="mt-6 border border-line">
+        <Art src={src} />
+        <div className="border-t border-line px-4 py-5">
+          <p className="font-mono text-meta text-pulse">{kicker}</p>
+          <h1 className="mt-3 font-display text-title">{title}</h1>
+        </div>
+      </div>
+      {action ? (
+        <button type="button" onClick={action.onClick} className="mt-4 h-12 w-full bg-fg font-display text-base text-bg">
+          {action.label}
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
+export function PredictGate() {
+  return <SignInBlock kicker="PULSE" title="SEE THE CROWD." />;
+}

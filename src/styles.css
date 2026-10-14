@@ -1,0 +1,223 @@
+@import "@fontsource/space-grotesk/400.css";
+@import "@fontsource/space-grotesk/500.css";
+@import "@fontsource/space-grotesk/600.css";
+@import "@fontsource/space-grotesk/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #080808;
+  --color-ink: #0d0d0d;
+  --color-surface: #111111;
+  --color-elevated: #161616;
+  --color-fg: #f1f0ea;
+  --color-secondary: #92928d;
+  --color-muted: #5c5c58;
+  --color-line: #2d2d2d;
+  --color-line-soft: #1d1d1d;
+  --color-pulse: #e83d43;
+  --color-down: #7d2028;
+  --color-up: #a8e63a;
+  --font-sans: "Space Grotesk", ui-sans-serif, sans-serif;
+  --font-display: "Space Grotesk", ui-sans-serif, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --text-price: clamp(4rem, 16vw, 4.5rem);
+  --text-price--line-height: 0.86;
+  --text-price--letter-spacing: -0.02em;
+  --text-price--font-weight: 700;
+  --text-clock: clamp(4rem, 16vw, 4.5rem);
+  --text-clock--line-height: 0.86;
+  --text-clock--letter-spacing: -0.02em;
+  --text-clock--font-weight: 700;
+  --text-title: clamp(2.4rem, 12vw, 3.25rem);
+  --text-title--line-height: 0.9;
+  --text-title--letter-spacing: -0.04em;
+  --text-meta: 0.6875rem;
+  --text-meta--line-height: 1.35;
+  --text-meta--letter-spacing: 0.08em;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    background: var(--color-bg);
+  }
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  :focus-visible {
+    outline: 1px solid var(--color-fg);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: var(--color-pulse);
+    color: var(--color-fg);
+  }
+}
+
+.grain {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.04;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  background-size: 140px 140px;
+}
+
+.barcode {
+  height: 1.35rem;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--color-fg) 0 1px,
+    transparent 1px 3px,
+    var(--color-fg) 3px 5px,
+    transparent 5px 7px,
+    var(--color-fg) 7px 8px,
+    transparent 8px 12px,
+    var(--color-fg) 12px 13px,
+    transparent 13px 16px
+  );
+  opacity: 0.85;
+}
+
+.ring-spin {
+  animation: ring-spin 48s linear infinite;
+}
+
+@keyframes ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes butterfly {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(6px, -8px, 0);
+  }
+}
+
+.pulse-dot {
+  animation: pulse-dot 1s linear infinite;
+}
+
+.pixel-scan {
+  animation: pixel-scan 3.2s linear infinite;
+}
+
+.pixel-drop {
+  animation: pixel-drop 180ms ease-out;
+}
+
+.scan-line {
+  animation: scan 2.4s linear infinite;
+}
+
+.ticket-print {
+  animation: print-in 250ms ease-out both;
+}
+
+.ticket-tear {
+  animation: tear-away 300ms ease-in forwards;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  45% {
+    opacity: 1;
+  }
+  55% {
+    opacity: 0.2;
+  }
+}
+
+@keyframes pixel-scan {
+  0%,
+  18%,
+  100% {
+    background-color: #161616;
+  }
+  8% {
+    background-color: #3a3a36;
+  }
+}
+
+@keyframes pixel-drop {
+  from {
+    transform: translateY(-8px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes scan {
+  0% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(8rem);
+  }
+}
+
+@keyframes print-in {
+  from {
+    transform: translateY(1.5rem);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes tear-away {
+  to {
+    transform: translateY(4.5rem) scale(0.35);
+    opacity: 0;
+  }
+}
+
+@keyframes tick-in {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.tick-in {
+  animation: tick-in 160ms steps(2, end);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot,
+  .scan-line,
+  .ticket-print,
+  .ticket-tear,
+  .tick-in,
+  .pixel-scan,
+  .pixel-drop,
+  .ring-spin {
+    animation: none !important;
+  }
+}
