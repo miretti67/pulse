@@ -79,7 +79,8 @@ export function PredictScreen() {
   });
   const opened = useRef(0);
   const released = useRef(false);
-  const [intro, setIntro] = useState(true);
+  // null = not read yet (SSR / first paint): show the welcome so nothing else ever flashes first.
+  const [intro, setIntro] = useState<boolean | null>(null);
   const [cover, setCover] = useState<"on" | "out" | "off">("on");
   const [slow, setSlow] = useState(false);
   const [tint, setTint] = useState<"none" | "up" | "down">("none");
@@ -88,11 +89,11 @@ export function PredictScreen() {
   useEffect(() => {
     opened.current = performance.now();
     try {
-      if (localStorage.getItem(INTRO_KEY) === "1") setIntro(false);
+      setIntro(localStorage.getItem(INTRO_KEY) !== "1");
       const saved = localStorage.getItem(SIDE_KEY);
       if (saved === "up" || saved === "down") setTint(saved);
     } catch {
-      /* welcome stays up */
+      setIntro(true);
     }
     const slowTimer = window.setTimeout(() => setSlow(true), 8000);
     const failTimer = window.setTimeout(() => setStuck(true), 5000);
@@ -137,6 +138,7 @@ export function PredictScreen() {
   const showMarket = ready && intro === false;
   const showButterfly = intro !== true && cover !== "off" && !failed;
 
+  if (intro === null) return <div data-intro-cover className="fixed inset-0 z-40 bg-bg" aria-hidden />;
   if (intro) {
     return (
       <Welcome
@@ -329,20 +331,27 @@ function LiveMarket({
   const change = price != null && open != null && open !== 0 ? ((price - open) / open) * 100 : null;
   const points = snap.me?.points ?? null;
 
+  // print (250ms) -> hold (300ms) -> tear. Each step owns its own timer so a phase change can't
+  // cancel the next step (the old single effect cleared its own timers on print -> hold).
   useEffect(() => {
-    if (phase !== "print") return;
-    haptic("confirm");
-    const t1 = window.setTimeout(() => setPhase("hold"), reduced ? 0 : 250);
-    const t2 = window.setTimeout(() => setPhase("tear"), reduced ? 0 : 550);
-    const t3 = window.setTimeout(() => {
-      frozen.current = null;
-      setPhase("idle");
-    }, reduced ? 0 : 1700);
-    return () => {
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
-      window.clearTimeout(t3);
-    };
+    if (phase === "print") {
+      haptic("confirm");
+      const t = window.setTimeout(() => setPhase("hold"), reduced ? 0 : 250);
+      return () => window.clearTimeout(t);
+    }
+    if (phase === "hold") {
+      const t = window.setTimeout(() => setPhase("tear"), reduced ? 0 : 300);
+      return () => window.clearTimeout(t);
+    }
+    if (phase === "tear") {
+      // Reduced motion: no flight, the bar just updates. Otherwise the stream landing ends the
+      // sequence (tear effect below); this is only a safety net.
+      const t = window.setTimeout(() => {
+        frozen.current = null;
+        setPhase("idle");
+      }, reduced ? 300 : 4000);
+      return () => window.clearTimeout(t);
+    }
   }, [phase, reduced]);
 
   useEffect(() => {
@@ -360,18 +369,41 @@ function LiveMarket({
         poof.update(t);
         poof.render();
       });
-      const src = box(body, root);
-      const cells = [...root.querySelectorAll<HTMLElement>("[data-cell]")];
-      const ups = cells.filter((cell) => cell.dataset.side === "up");
-      const downs = cells.filter((cell) => cell.dataset.side === "down");
-      const cell =
-        side === "down"
-          ? (downs[1] ?? downs[0] ?? cells[cells.length - 1])
-          : (ups[Math.max(0, ups.length - 2)] ?? ups.at(-1) ?? cells[0]);
-      if (!cell) return;
-      poof.poof(src, box(cell, root), "#F1F0EA", () => {
-        const idx = Number(cell.dataset.cell);
-        if (!Number.isNaN(idx)) setLit(idx);
+      // Reference callSide(): body shrinks to 0.55 (300ms, inOutCubic), then poofs into dots that
+      // stream into the 2nd block from the divide on the user's side of the crowd bar.
+      body.style.transformOrigin = "center";
+      const shrink = body.animate([{ transform: "scale(1)" }, { transform: "scale(0.55)" }], {
+        duration: 300,
+        easing: "cubic-bezier(0.65, 0, 0.35, 1)",
+        fill: "forwards",
+      });
+      void shrink.finished.then(() => {
+        if (dead) return;
+        const src = box(body, root);
+        body.style.visibility = "hidden";
+        // Only the main crowd bar: the market rows above render their own mini PixelBars.
+        const cells = [...root.querySelectorAll<HTMLElement>("[data-crowd-bar] [data-cell]")];
+        const ups = cells.filter((c) => c.dataset.side === "up");
+        const downs = cells.filter((c) => c.dataset.side === "down");
+        const cell =
+          side === "down"
+            ? (downs[1] ?? downs[0] ?? cells[cells.length - 1])
+            : (ups[Math.max(0, ups.length - 2)] ?? ups.at(-1) ?? cells[0]);
+        if (!cell) return;
+        poof.poof(src, box(cell, root), "#F1F0EA", () => {
+          const idx = Number(cell.dataset.cell);
+          const lit = side === "down" ? "rgb(168, 57, 74)" : "rgb(205, 243, 138)";
+          // flash: near off-white for ~250ms easing into the lit colour, which persists
+          const flash = cell.animate([{ backgroundColor: "rgb(241, 240, 234)" }, { backgroundColor: lit }], {
+            duration: 250,
+            easing: "cubic-bezier(0.32, 0, 0.67, 0)",
+          });
+          void flash.finished.then(() => {
+            if (!Number.isNaN(idx)) setLit(idx);
+            frozen.current = null;
+            setPhase("idle");
+          });
+        });
       });
     });
     return () => {
@@ -476,7 +508,9 @@ function LiveMarket({
 
       <div className="mt-6">
         <Mark n="01" label="THE CROWD" />
-        <PixelBar upPct={upPct} empty={total === 0} dropSide={crowd.dropSide} dropKey={crowd.dropKey} litIndex={lit} />
+        <div data-crowd-bar>
+          <PixelBar upPct={upPct} empty={total === 0} dropSide={crowd.dropSide} dropKey={crowd.dropKey} litIndex={lit} />
+        </div>
         <p className="mt-3 font-mono text-meta text-fg">
           {total === 0
             ? "WAITING ON THE FIRST CALL"
@@ -504,7 +538,6 @@ function LiveMarket({
               share={position?.share}
               est={position?.estReturn}
               serial={position?.serial ?? "SN-·····"}
-              hideBody={phase === "tear" && !reduced}
             />
           </div>
         ) : (
