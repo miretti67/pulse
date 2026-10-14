@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import { PriceSheet } from "./price-sheet";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { getPulse, placeCall } from "@/lib/pulse/api";
 import { formatClock, formatPct, formatPrice, formatPts, formatSignedPts, formatUtc, sideLabel } from "@/lib/pulse/format";
@@ -214,7 +215,8 @@ function PredictBody({
   }, []);
   const serverNow = Date.parse(snap.serverNow) + (now - receivedAt);
   const markets = snap.markets?.length ? snap.markets : snap.market ? [snap.market] : [];
-  const market = markets.find((m) => m.lengthMin === length) ?? markets[0] ?? null;
+  // No silent fallback: if the chosen length has no market yet, say so instead of showing another one.
+  const market = markets.find((m) => m.lengthMin === length) ?? null;
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -224,6 +226,19 @@ function PredictBody({
     }, 15000);
     return () => window.clearInterval(id);
   }, [market, snap.serverNow, receivedAt]);
+
+  if (!market && markets.length) {
+    return (
+      <section className="pb-8">
+        <MarketRows markets={markets} length={length} onLength={setLength} serverNow={serverNow} holds={snap.me?.holds ?? []} />
+        <div data-no-market className="mt-6 border border-line px-4 py-8">
+          <p className="font-mono text-meta text-secondary">{length}M MARKET</p>
+          <h1 className="mt-3 font-display text-title">NO MARKET YET.</h1>
+          <p className="mt-4 font-mono text-meta text-secondary">THE NEXT {length}M ROUND OPENS SHORTLY. PICK ANOTHER CARD OR WAIT.</p>
+        </div>
+      </section>
+    );
+  }
 
   if (!market) {
     return <StatusArt src="/pulse/signal.jpg" kicker="MARKET UNAVAILABLE" title="NO SIGNAL." action={null} />;
@@ -316,6 +331,7 @@ function LiveMarket({
   const [phase, setPhase] = useState<"idle" | "print" | "hold" | "tear">("idle");
   const [lit, setLit] = useState<number | null>(null);
   const [replay, setReplay] = useState(false);
+  const [chart, setChart] = useState(false);
   const stageRef = useRef<HTMLElement>(null);
   const fxRef = useRef<HTMLCanvasElement>(null);
   const frozen = useRef<MarketSnap | null>(null);
@@ -438,6 +454,7 @@ function LiveMarket({
     <section ref={stageRef} className="relative pb-8">
       <canvas ref={fxRef} className="pointer-events-none absolute inset-0 z-20 h-full w-full" aria-hidden />
       {replay ? <LineReplay onClose={() => setReplay(false)} /> : null}
+      {chart ? <PriceSheet market={market} serverNow={serverNow} onClose={() => setChart(false)} /> : null}
       <Header
         points={points}
         inPlay={snap.me?.inPlay ?? 0}
@@ -457,7 +474,9 @@ function LiveMarket({
         <p className="relative font-mono text-meta text-secondary">BTC / USD</p>
         {price != null ? (
           <>
-            <TickText value={formatPrice(price)} className="relative text-price text-fg [&>span]:bg-bg" />
+            <button type="button" data-price-tap aria-label="Open live chart" className="relative block text-left" onClick={() => setChart(true)}>
+              <TickText value={formatPrice(price)} className="relative text-price text-fg [&>span]:bg-bg" />
+            </button>
             <p className="sr-only">Bitcoin {formatPrice(price)}</p>
           </>
         ) : (
@@ -654,32 +673,79 @@ function MarketRows({
   serverNow: number;
   holds: { code: string }[];
 }) {
+  const rail = useRef<HTMLDivElement>(null);
+  // Picker 1B: horizontal snap cards. Swiping settles the centred card as the selection.
+  useEffect(() => {
+    const el = rail.current;
+    if (!el) return;
+    let t = 0;
+    const onScroll = () => {
+      window.clearTimeout(t);
+      t = window.setTimeout(() => {
+        const mid = el.scrollLeft + el.clientWidth / 2;
+        let best: LengthMin = length, bestD = Infinity;
+        for (const card of Array.from(el.children) as HTMLElement[]) {
+          const d = Math.abs(card.offsetLeft + card.offsetWidth / 2 - mid);
+          if (d < bestD) { bestD = d; best = Number(card.dataset.len) as LengthMin; }
+        }
+        if (best !== length) onLength(best);
+      }, 120);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => { el.removeEventListener("scroll", onScroll); window.clearTimeout(t); };
+  }, [length, onLength]);
+  useEffect(() => {
+    const card = rail.current?.querySelector<HTMLElement>(`[data-len="${length}"]`);
+    card?.scrollIntoView?.({ inline: "center", block: "nearest", behavior: "smooth" });
+  }, [length]);
   return (
-    <div className="mt-4 border-t border-line md:grid md:grid-cols-3 md:border-t-0">
+    <div
+      ref={rail}
+      role="radiogroup"
+      aria-label="Market length"
+      className="-mx-4 mt-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 [scrollbar-width:none]"
+    >
       {([1, 5, 15] as const).map((len) => {
         const row = markets.find((m) => m.lengthMin === len);
         const close = row ? Date.parse(row.closesAt) - serverNow : 0;
+        const lockIn = row ? Date.parse(row.locksAt) - serverNow : 0;
+        const span = row ? Date.parse(row.closesAt) - Date.parse(row.opensAt) : 1;
+        const done = row ? Math.min(1, Math.max(0, 1 - close / span)) : 0;
         const total = row ? row.upPool + row.downPool : 0;
         const up = total > 0 ? (row!.upPool / total) * 100 : 0;
         const held = row ? holds.some((h) => h.code === row.code) : false;
         const active = length === len;
+        const locked = row ? row.status !== "open" || lockIn <= 0 : false;
         return (
           <button
             key={len}
+            data-len={len}
             type="button"
+            role="radio"
+            aria-checked={active}
             onClick={() => onLength(len)}
-            className={`flex min-h-16 w-full items-center gap-3 border-b border-line py-3 text-left md:border md:px-3 ${
-              active ? "text-fg md:border-fg" : "text-secondary md:border-line"
+            className={`relative w-[78%] max-w-[300px] shrink-0 snap-center border px-4 py-3 text-left transition-colors ${
+              active ? "border-fg bg-[#111] text-fg" : "border-line text-secondary opacity-70"
             }`}
           >
-            <span className="w-16 shrink-0 font-mono text-meta">
-              {len}M{len === 1 ? " FAST" : ""}
+            <span className="flex items-center justify-between font-mono text-meta">
+              <span>{len}M{len === 1 ? " FAST" : ""}</span>
+              <span>{active ? "● SELECTED" : held ? "LIVE" : row ? (locked ? "LOCKED" : "OPEN") : ""}</span>
             </span>
-            <span className="w-14 shrink-0 font-display text-xl tabular-nums">{row ? formatClock(close) : "--:--"}</span>
-            <span className="min-w-0 flex-1">
+            <span className="mt-2 block font-display text-3xl tabular-nums">{row ? formatClock(close) : "--:--"}</span>
+            <span className="mt-1 block font-mono text-meta">
+              {!row ? "NO MARKET YET" : locked ? "LOCKED · SETTLES AT ZERO" : `LOCKS IN ${formatClock(lockIn)}`}
+            </span>
+            <span className="mt-2 block h-[3px] bg-line">
+              <span className="block h-full bg-fg" style={{ width: `${done * 100}%` }} />
+            </span>
+            <span className="mt-3 block">
               <PixelBar upPct={up} empty={!row || total === 0} calm />
             </span>
-            <span className="shrink-0 font-mono text-meta">{held ? "LIVE" : ""}</span>
+            <span className="mt-1 flex justify-between font-mono text-meta">
+              <span>{total ? `UP ${Math.round(up)}%` : "NO CALLS YET"}</span>
+              <span>{row ? `${row.participants} IN` : ""}</span>
+            </span>
           </button>
         );
       })}
