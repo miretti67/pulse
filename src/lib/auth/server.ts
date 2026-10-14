@@ -60,7 +60,13 @@ const globalAuthRef = globalThis as typeof globalThis & {
   __grokAuthPreviewSecret__?: string;
 };
 function previewAuthSecret(): string {
-  globalAuthRef.__grokAuthPreviewSecret__ ??= randomBytes(32).toString("hex");
+  try {
+    globalAuthRef.__grokAuthPreviewSecret__ ??= randomBytes(32).toString("hex");
+  } catch {
+    // Cloudflare Workers forbid random bytes at global scope. The CF preview runs with auth off
+    // (VITE_AUTH_ENABLED=false, demo mode), so this placeholder never signs a real session.
+    globalAuthRef.__grokAuthPreviewSecret__ ??= "cf-preview-auth-disabled-placeholder-secret-0000";
+  }
   return globalAuthRef.__grokAuthPreviewSecret__;
 }
 

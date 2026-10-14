@@ -12,3 +12,4 @@ screenshots
 *.log
 dist
 .output
+.wrangler/
