@@ -97,8 +97,6 @@ function load(): Store {
   store = { bots: makeBots(seed), user: emptyUser(), calls: [], markets: [], activity: [], serial: 1000, seed, startedAt: Date.now() };
   backfillHistory(store, seed);
   save();
-  // open markets get a first crowd before the interval ticks
-  setTimeout(() => { try { demoBusySnapshot(); } catch { /* ignore */ } }, 0);
   return store;
 }
 
@@ -387,11 +385,16 @@ async function pollPrice() {
   }
 }
 
+let burstOnce = false;
 function ensureRunning() {
   if (typeof window === "undefined" || running || !isDemoOn()) return;
   running = true;
   load();
-  void pollPrice().then(() => { ensureMarkets(Date.now()); tickSim(Date.now()); });
+  void pollPrice().then(() => {
+    ensureMarkets(Date.now());
+    if (!burstOnce) { burstOnce = true; demoBusySnapshot(); }
+    else tickSim(Date.now());
+  });
   pollTimer = window.setInterval(() => void pollPrice(), 2000);
   simTimer = window.setInterval(() => tickSim(Date.now()), 900);
 }
@@ -654,6 +657,7 @@ export function demoSetUsername(name: string) {
 
 export function demoReset() {
   stop();
+  burstOnce = false;
   store = null;
   try { localStorage.removeItem(KEY); } catch { /* ignore */ }
   if (isDemoOn()) ensureRunning();
