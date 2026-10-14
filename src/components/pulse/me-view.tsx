@@ -7,6 +7,7 @@ import { getProfile, syncProfile } from "@/lib/pulse/api";
 import { formatPts } from "@/lib/pulse/format";
 import { telegram } from "@/lib/pulse/telegram";
 import { Art, SignInBlock } from "./chrome";
+import { DustAvatar, localAvatar } from "./dust-avatar";
 
 export function MeScreen() {
   const [on, setOn] = useState(false);
@@ -92,7 +93,15 @@ function ProfileLive() {
       </p>
 
       <article className="mt-8 border border-pulse">
-        <Art src="/pulse/profile.jpg" className="h-56 w-full object-cover object-center" />
+        {(q.data.avatar ?? localAvatar()) ? (
+          <DustAvatar
+            avatar={(q.data.avatar ?? localAvatar())!}
+            tint={q.data.lastSide ?? "none"}
+            className="h-56 w-full"
+          />
+        ) : (
+          <Art src="/pulse/profile.jpg" className="h-56 w-full object-cover object-center" />
+        )}
         <div className="border-t border-line px-4 py-4">
           <div className="flex items-start justify-between">
             <p className="font-mono text-meta text-secondary">PULSE</p>

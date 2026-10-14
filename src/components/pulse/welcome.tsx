@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { signIn } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { claimUsername } from "@/lib/pulse/api";
+import { claimUsername, saveAvatar } from "@/lib/pulse/api";
 import { useReducedMotion } from "@/lib/pulse/telegram";
+import { AVATARS, type AvatarId } from "@/lib/pulse/types";
+import { BUSTS } from "@/lib/pulse/dustbust";
 
 const BEATS = [
   { n: "01 / 03", title: "Watch the\nprice.", body: "BTC, live. A new market every 1, 5 or 15 minutes." },
@@ -10,20 +12,26 @@ const BEATS = [
   { n: "03 / 03", title: "See who\nwas right.", body: "Clock hits zero. The right side splits the pool." },
 ] as const;
 
-type Screen = "welcome" | "explainer" | "signin" | "email" | "username" | "landed";
+type Screen = "land" | "explainer" | "signin" | "email" | "username" | "avatar" | "landed";
+
+const AVATAR_KEY = "pulse-avatar";
+const lowEnd = () => typeof navigator !== "undefined" && (navigator.hardwareConcurrency ?? 8) <= 4;
 
 export function Welcome({ onDone }: { onDone: () => void }) {
   const reduced = useReducedMotion();
   const { user } = useCurrentUserState();
-  const [screen, setScreen] = useState<Screen>("welcome");
+  const [screen, setScreen] = useState<Screen>("land");
   const [beat, setBeat] = useState(0);
-  const [copyOn, setCopyOn] = useState(reduced);
   const [name, setName] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [booted, setBooted] = useState(false);
+  const [tapped, setTapped] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fxRef = useRef<HTMLCanvasElement>(null);
+  const logoRef = useRef<SVGSVGElement>(null);
+  const appRef = useRef<HTMLDivElement>(null);
   const fieldRef = useRef<Field | null>(null);
   const screenRef = useRef(screen);
   screenRef.current = screen;
@@ -39,42 +47,27 @@ export function Welcome({ onDone }: { onDone: () => void }) {
   useEffect(() => {
     let dead = false;
     let stop = () => {};
-    void import("@/lib/pulse/motion").then((motion) => {
+    void Promise.all([import("@/lib/pulse/motion"), import("@/lib/pulse/logo-points")]).then(([motion, logo]) => {
       const canvas = canvasRef.current;
       if (dead || !canvas) return;
       motion.setReduced(reduced);
-      const field = new motion.ButterflyField(reduced ? 480 : 2000) as Field;
+      const field = new motion.ButterflyField(reduced ? 480 : lowEnd() ? 1200 : 2000) as unknown as Field;
       fieldRef.current = field;
       field.mount(canvas);
-      field.pose.cx = 0.5;
-      field.pose.cy = 0.3;
-      field.pose.size = Math.min(138, field.w * 0.36);
-      field.pose.yaw = -0.32;
-      field.pose.pitch = 0.45;
-      field.pose.roll = 0.1;
-      field.flap.period = 600;
-      field.flap.amp = 0.62;
-      field.flap.base = 0.28;
-      field.opacity = 1;
-      field.drift = 0.25;
+      const L = logoRef.current?.getBoundingClientRect();
+      const A = appRef.current?.getBoundingClientRect();
+      if (L && A) field.logoRect = { x: L.left - A.left, y: L.top - A.top, w: L.width, h: L.height };
+      field.logoPts = logo.LOGO_PTS;
+      field.mode = "logo";
+      field.opacity = 0;
+      field.drift = 0;
+      const heads = makeHeads();
       stop = motion.watch((t: number, dt: number) => {
         field.update(t, dt);
         field.render();
+        drawHeads(fxRef.current, field, heads, t);
       });
       setBooted(true);
-      if (reduced) {
-        field.form({ from: "scatter", dur: 0, stagger: 0 });
-        field.finish();
-        setCopyOn(true);
-        return;
-      }
-      // reference runWelcome(): dots gather 0 -> ~1.95s, then the copy reveals
-      field.form({ from: "scatter", dur: 1500, stagger: 450 });
-      window.setTimeout(() => {
-        if (dead || screenRef.current !== "welcome") return;
-        field.finish();
-        setCopyOn(true);
-      }, 1950);
     });
     return () => {
       dead = true;
@@ -83,18 +76,68 @@ export function Welcome({ onDone }: { onDone: () => void }) {
     };
   }, [reduced]);
 
+  // Real tap: the crisp logo hands over to its own particles, they burst into the butterfly,
+  // which flies off to the right and comes back as a faint background behind the explainer.
+  async function tapLogo() {
+    if (tapped) return;
+    setTapped(true);
+    const field = fieldRef.current;
+    const pose = (f: Field) => {
+      Object.assign(f.pose, { cx: 0.5, cy: 0.34, size: Math.min(150, f.w * 0.4), yaw: -0.32, pitch: 0.45, roll: 0.1 });
+      Object.assign(f.flap, { period: 600, amp: 0.62, base: 0.28 });
+      f.drift = 0.25;
+      f.mode = "fly";
+      f.shape = "fly";
+    };
+    if (!field || reduced) {
+      if (field) {
+        pose(field);
+        field.form({ from: "scatter", dur: 0, stagger: 0 });
+        field.finish();
+        void field.setBackground(true, 0);
+        void field.setPose({ cx: 0.84, cy: 0.18, size: Math.min(210, field.w * 0.54) }, 0);
+        void field.setOpacity(1, 0);
+      }
+      setScreen("explainer");
+      return;
+    }
+    const motion = await import("@/lib/pulse/motion");
+    await field.setOpacity(1, 180);
+    field.ripple(0.6);
+    await motion.wait(320);
+    pose(field);
+    field.form({ from: "current", dur: 1100, stagger: 500 });
+    await motion.wait(2000);
+    await field.flyTo(1.18, 0.28, Math.min(150, field.w * 0.4), 1400);
+    void field.setBackground(true, 700);
+    field.setFlap({ period: 1700, amp: 0.5 }, 800);
+    field.drift = 0.9;
+    void field.setPose({ cx: 0.84, cy: 0.18, size: Math.min(210, field.w * 0.54), yaw: -0.4, roll: 0.12 }, 900);
+    if (screenRef.current === "land") setScreen("explainer");
+  }
+
   useEffect(() => {
     const field = fieldRef.current;
     if (!field || !booted) return;
-    // The butterfly lives on the welcome screen only. Explainer, sign-in, email and username are
-    // plain black: fade the field out as soon as we leave welcome (no background butterfly, no
-    // fly-to/dissolve transition on landing).
-    if (screen === "welcome") {
-      void field.setOpacity(1, reduced ? 0 : 400);
-      void field.setPose({ cx: 0.5, cy: 0.3, size: Math.min(138, field.w * 0.36) }, reduced ? 0 : 500);
-      return;
+    const d = reduced ? 0 : 1;
+    if (screen === "signin" || screen === "email") {
+      field.globeCx = 0.82;
+      field.globeCy = 0.16;
+      field.globeR = Math.min(130, field.w * 0.33);
+      field.headsOff = false;
+      if (field.mode !== "globe") {
+        void field.setOpacity(0.4, 700 * d);
+        void field.toGlobe(1300 * d, 850 * d);
+      }
+    } else if (screen === "explainer") {
+      if (field.mode === "globe") {
+        field.headsOff = true;
+        void field.toFly(1100 * d, 500 * d);
+      }
+    } else if (screen !== "land") {
+      field.headsOff = true;
+      void field.setOpacity(0, 500 * d);
     }
-    void field.setOpacity(0, reduced ? 0 : 400);
   }, [booted, reduced, screen]);
 
   useEffect(() => {
@@ -112,29 +155,26 @@ export function Welcome({ onDone }: { onDone: () => void }) {
     onDone();
   }
 
-  function land(handle: string) {
-    setName(handle);
+  function finish(avatar: AvatarId) {
+    try {
+      localStorage.setItem(AVATAR_KEY, avatar);
+      sessionStorage.removeItem("pulse-intro-user");
+    } catch {
+      /* ignore */
+    }
+    if (user) void saveAvatar({ data: { avatar } }).catch(() => {});
     setScreen("landed");
     window.setTimeout(onDone, reduced ? 400 : 2200);
   }
 
-  const first = useRef(true);
-  useEffect(() => {
-    if (screen !== "welcome") first.current = false;
-  }, [screen]);
-
-  // Markup and classes mirror the reference screens one-to-one (see .pi in styles.css).
   return (
     <div data-intro-cover className="pi">
-      <div className="pi-app">
+      <div className="pi-app" ref={appRef}>
         <canvas ref={canvasRef} className="pi-field" aria-hidden />
+        <canvas ref={fxRef} className="pi-field" aria-hidden />
 
-        {screen === "welcome" ? (
-          <section
-            className={`screen s-welcome${first.current ? " first" : ""}`}
-            aria-label="Welcome"
-            onClick={() => (copyOn ? setScreen("explainer") : setCopyOn(true))}
-          >
+        {screen === "land" ? (
+          <section className="screen s-land" aria-label="Welcome" onClick={() => void tapLogo()}>
             <div className="topbar">
               <span />
               <button type="button" className="skip" onClick={(e) => { e.stopPropagation(); setScreen("signin"); }}>
@@ -142,17 +182,20 @@ export function Welcome({ onDone }: { onDone: () => void }) {
               </button>
             </div>
             <div className="spacer" />
-            <div className={`copy${copyOn ? " on" : ""}`}>
-              <div className="mark">PULSE</div>
-              <h1>
-                The crowd
-                <br />
-                has a pulse.
-              </h1>
-              <p className="sub">Bitcoin. A clock. Everyone&apos;s call.</p>
-              <p className="mono tap">TAP TO CONTINUE</p>
-            </div>
-            <div style={{ height: 64 }} />
+            <svg
+              ref={logoRef}
+              className="pi-logo"
+              viewBox="0 0 320 200"
+              aria-label="Pulse"
+              style={{ opacity: tapped ? 0 : 1, transition: "opacity 260ms ease 180ms" }}
+            >
+              <path d="M70 70 H128 L138 46 L150 98 L162 30 L174 84 L182 70 H250" fill="none" stroke="#F2F2F2" strokeWidth="5" strokeLinejoin="miter" />
+              <text x="160" y="150" textAnchor="middle" fill="#F2F2F2" fontFamily="var(--font-display, sans-serif)" fontSize="44" fontWeight="700" letterSpacing="6">PULSE</text>
+              <rect x="236" y="122" width="14" height="14" fill="#E5484D" />
+            </svg>
+            <div className="spacer" />
+            <p className="mono tap" style={{ opacity: tapped ? 0 : 1, transition: "opacity 300ms" }}>TAP THE LOGO</p>
+            <div style={{ height: 40 }} />
             <p className="footer">POINTS HAVE NO CASH VALUE.</p>
           </section>
         ) : null}
@@ -188,7 +231,7 @@ export function Welcome({ onDone }: { onDone: () => void }) {
           />
         ) : null}
 
-        {screen === "username" || screen === "landed" ? (
+        {screen === "username" ? (
           <section className="screen s-username" aria-label="Choose a name">
             <div className="topbar">
               <span className="mark">PULSE</span>
@@ -198,13 +241,13 @@ export function Welcome({ onDone }: { onDone: () => void }) {
             </div>
             <div className="spacer" />
             <form
-              className={`un-form${screen === "landed" ? " out" : ""}`}
+              className="un-form"
               autoComplete="off"
               onSubmit={(event) => {
                 event.preventDefault();
                 if (name.length < 3 || busy) return;
                 if (!user) {
-                  land(name);
+                  setScreen("avatar");
                   return;
                 }
                 setBusy(true);
@@ -216,7 +259,8 @@ export function Welcome({ onDone }: { onDone: () => void }) {
                       setErr(res.reason === "taken" ? "TAKEN. TRY ANOTHER." : "THREE CHARACTERS, AT LEAST.");
                       return;
                     }
-                    land(res.username);
+                    setName(res.username);
+                    setScreen("avatar");
                   })
                   .catch(() => {
                     setBusy(false);
@@ -255,21 +299,151 @@ export function Welcome({ onDone }: { onDone: () => void }) {
               </button>
             </form>
             <div style={{ height: 28 }} />
-            {screen === "landed" ? (
-              <div className="un-done">
-                <p className="mono">@{name.toUpperCase()}</p>
-                <h1>
-                  Welcome in.
-                  <br />
-                  10,000 pts to start.
-                </h1>
-              </div>
-            ) : null}
           </section>
+        ) : null}
+
+        {screen === "avatar" || screen === "landed" ? (
+          <AvatarPick name={name} landed={screen === "landed"} reduced={reduced} onPick={finish} />
         ) : null}
       </div>
     </div>
   );
+}
+
+function AvatarPick({
+  name,
+  landed,
+  reduced,
+  onPick,
+}: {
+  name: string;
+  landed: boolean;
+  reduced: boolean;
+  onPick: (a: AvatarId) => void;
+}) {
+  const [sel, setSel] = useState<AvatarId>("hood");
+  const [glow, setGlow] = useState<"up" | "down">("up");
+  const bigRef = useRef<HTMLCanvasElement>(null);
+  const tileRefs = useRef<(HTMLCanvasElement | null)[]>([]);
+  const bigBust = useRef<{ setTint: (s: string) => void } | null>(null);
+  useEffect(() => {
+    let dead = false;
+    let stop = () => {};
+    void Promise.all([import("@/lib/pulse/motion"), import("@/lib/pulse/dustbust")]).then(([motion, dust]) => {
+      if (dead || !bigRef.current) return;
+      const big = new dust.DustBust(bigRef.current, sel, { n: reduced ? 6000 : lowEnd() ? 14000 : 22000, seed: 7 });
+      big.setTint(glow);
+      bigBust.current = big;
+      const tiles = AVATARS.map((id, i) => {
+        const c = tileRefs.current[i];
+        return c ? new dust.DustBust(c, id, { n: 2500, seed: 3 + i, dot: 2.2 }) : null;
+      });
+      let drewTiles = false;
+      stop = motion.watch((t: number) => {
+        big.render(reduced ? 0 : t);
+        if (!reduced || !drewTiles) for (const tile of tiles) tile?.render(reduced ? 0 : t);
+        drewTiles = true;
+      });
+    });
+    return () => {
+      dead = true;
+      stop();
+    };
+  }, [sel, reduced]);
+  useEffect(() => bigBust.current?.setTint(glow), [glow]);
+  const label = BUSTS.find((b: { id: string }) => b.id === sel)?.name ?? "";
+  return (
+    <section className="screen s-avatar" aria-label="Pick an avatar">
+      <div className="topbar">
+        <span className="mark">PULSE</span>
+        <span className="mono" style={{ fontSize: 11, opacity: 0.6 }}>@{name.toUpperCase()}</span>
+      </div>
+      <h1 className="md" style={{ marginTop: 8 }}>
+        Pick your
+        <br />
+        face.
+      </h1>
+      <div style={{ position: "relative", height: 260, margin: "6px auto 0", width: 260 }}>
+        <canvas ref={bigRef} width={256} height={256} style={{ width: 260, height: 260 }} aria-label={label} />
+      </div>
+      <p className="mono" style={{ textAlign: "center", fontSize: 12, letterSpacing: ".12em" }}>{label}</p>
+      <div className="seg" role="radiogroup" aria-label="Preview glow" style={{ display: "flex", gap: 6, justifyContent: "center", margin: "6px 0" }}>
+        {(["up", "down"] as const).map((g) => (
+          <button key={g} type="button" className={`chip${glow === g ? " on" : ""}`} aria-pressed={glow === g} onClick={() => setGlow(g)}>
+            {g === "up" ? "CALLED UP" : "CALLED DOWN"}
+          </button>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 6 }}>
+        {AVATARS.map((id, i) => (
+          <button
+            key={id}
+            type="button"
+            aria-label={id}
+            aria-pressed={sel === id}
+            onClick={() => setSel(id)}
+            style={{ border: `1px solid ${sel === id ? "#F2F2F2" : "#2A2A2A"}`, background: "#0B0B0B", padding: 2 }}
+          >
+            <canvas ref={(el) => { tileRefs.current[i] = el; }} width={256} height={256} style={{ width: "100%", aspectRatio: "1" }} />
+          </button>
+        ))}
+      </div>
+      <div className="spacer" />
+      {landed ? (
+        <div className="un-done">
+          <p className="mono">@{name.toUpperCase()}</p>
+          <h1>
+            Welcome in.
+            <br />
+            10,000 pts to start.
+          </h1>
+        </div>
+      ) : (
+        <button type="button" className="btn solid" onClick={() => onPick(sel)}>
+          THAT&apos;S MY FACE<span className="ar">→</span>
+        </button>
+      )}
+      <div style={{ height: 28 }} />
+    </section>
+  );
+}
+
+type Head = { th: number; ph: number; flip: number; s: number };
+function makeHeads(): Head[] {
+  let seed = 9;
+  const R = () => {
+    seed = (seed * 16807) % 2147483647;
+    return seed / 2147483647;
+  };
+  return Array.from({ length: 22 }, () => ({ th: R() * 6.28, ph: (R() - 0.5) * 1.4, flip: R() * 3000, s: 3 + R() * 1.8 }));
+}
+function drawHeads(c: HTMLCanvasElement | null, field: Field, heads: Head[], t: number) {
+  if (!c) return;
+  const g = c.getContext("2d");
+  if (!g) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const r = c.getBoundingClientRect();
+  if (c.width !== Math.round(r.width * dpr)) {
+    c.width = Math.round(r.width * dpr);
+    c.height = Math.round(r.height * dpr);
+  }
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.clearRect(0, 0, c.width, c.height);
+  if (field.mode !== "globe" || field.headsOff) return;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.globalAlpha = 0.85;
+  const cx = field.globeCx * field.w, cy = field.globeCy * field.h, R0 = field.globeR || 150, tilt = 0.42, yaw = t * 0.00035;
+  for (const h of heads) {
+    const th = h.th + yaw;
+    const x = Math.cos(th) * Math.cos(h.ph), y = Math.sin(h.ph), z = Math.sin(th) * Math.cos(h.ph);
+    const y2 = y * Math.cos(tilt) - z * Math.sin(tilt), z2 = y * Math.sin(tilt) + z * Math.cos(tilt);
+    if (z2 < 0.05) continue;
+    const k = 3.2 / (3.2 + z2), px = cx + x * R0 * k, py = cy + y2 * R0 * k, s = h.s * k;
+    g.fillStyle = ((t + h.flip) / 420) % 2 | 0 ? "#7D2028" : "#A8E63A";
+    g.fillRect(px - s / 2, py - s, s, s);
+    g.fillRect(px - s, py - s * 2.4, s * 2, s * 1.3);
+  }
+  g.globalAlpha = 1;
 }
 
 type Field = {
@@ -279,16 +453,27 @@ type Field = {
   flap: { period: number; amp: number; base: number };
   opacity: number;
   drift: number;
+  mode: string;
+  shape: string;
+  logoRect?: { x: number; y: number; w: number; h: number };
+  logoPts?: [number, number][];
+  globeCx: number;
+  globeCy: number;
+  globeR: number;
+  headsOff?: boolean;
   mount: (canvas: HTMLCanvasElement) => void;
   update: (t: number, dt: number) => void;
   render: () => void;
+  ripple: (k: number) => void;
   form: (opts: { from: string; dur: number; stagger: number }) => void;
   finish: () => void;
+  toGlobe: (dur?: number, stagger?: number) => Promise<unknown>;
+  toFly: (dur?: number, stagger?: number) => Promise<unknown>;
+  setFlap: (f: { period: number; amp: number }, dur?: number) => void;
   setBackground: (on: boolean, dur?: number) => Promise<unknown>;
   setOpacity: (a: number, dur?: number) => Promise<unknown>;
-  setPose: (pose: { cx: number; cy: number; size: number }, dur?: number) => Promise<unknown>;
+  setPose: (pose: Partial<{ cx: number; cy: number; size: number; yaw: number; roll: number }>, dur?: number) => Promise<unknown>;
   flyTo: (cx: number, cy: number, size: number, dur?: number) => Promise<unknown>;
-  dissolve: (rect: { x: number; y: number; w: number; h: number }, opts: { dur: number; stagger: number }) => Promise<unknown>;
 };
 
 function Explainer({

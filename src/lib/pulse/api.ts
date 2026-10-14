@@ -74,3 +74,11 @@ export const getProfile = createServerFn({ method: "GET" })
     const { loadProfile } = await import("./engine.server");
     return loadProfile(context.userId);
   });
+
+export const saveAvatar = createServerFn({ method: "POST" })
+  .validator((input: { avatar?: string | null }) => ({ avatar: typeof input?.avatar === "string" ? input.avatar.slice(0, 12) : "" }))
+  .middleware([authMiddleware])
+  .handler(async ({ context, data }) => {
+    const { setAvatar } = await import("./engine.server");
+    return setAvatar(context.userId, data.avatar);
+  });

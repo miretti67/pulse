@@ -167,7 +167,7 @@ class ButterflyField {
     for (let i = 0; i < n; i++) { this.size[i] = .8 + R2() * R2() * 1.3; this.ph[i] = R2() * 6.28; this.sp[i] = .4 + R2() * .9; this.arc[i] = (R2() - .5) * 2; }
     this.pose = { cx: .5, cy: .32, size: 150, yaw: -.32, pitch: .45, roll: .1 };
     this.flap = { period: 600, amp: .62, base: .28 };
-    this.opacity = 1; this.drift = .25; this.shape = 'fly'; this.bustRect = null; this.bustMix = 0;
+    this.opacity = 1; this.drift = .25; this.shape = 'fly'; this.bustRect = null; this.bustMix = 0; this.mode = 'fly';
     this.tint = { r: 241, g: 240, b: 234 }; this._ripple = 0; this.dotScale = 1; this.tintK = 0;
     this.morph = null; // {t0, dur, stagger}
     this.lead = 0;     // wing phase (ms) — integrates period so period changes stay smooth
@@ -205,6 +205,24 @@ class ButterflyField {
       this.ta[i] = p[3] * Math.max(.35, Math.min(1.15, 1 - z2 * .35));
     }
   }
+
+  /* intro v2: dots sit on the logo artwork until the tap */
+  _logoTargets(t) { const r = this.logoRect, P = this.logoPts; if (!r || !P) return; for (let i = 0; i < this.n; i++) { const p = P[i % P.length];
+    this.tx[i] = r.x + p[0] * r.w + Math.sin(t * .0012 * this.sp[i] + this.ph[i]) * .5; this.ty[i] = r.y + p[1] * r.h + Math.cos(t * .001 * this.sp[i] + this.ph[i]) * .5; this.ta[i] = .9; } }
+  /* intro v2: faint rotating dotted globe (join the crowd) */
+  _globeTargets(t) {
+    const n = this.n, R = this.globeR || 150, cx = this.globeCx * this.w, cy = this.globeCy * this.h, yaw = t * 0.00035, tilt = .42;
+    for (let i = 0; i < n; i++) { const p = this.globe[i]; const th = p[0] + yaw, ph = p[1];
+      const x = Math.cos(th) * Math.cos(ph), y = Math.sin(ph), z = Math.sin(th) * Math.cos(ph);
+      const y2 = y * Math.cos(tilt) - z * Math.sin(tilt), z2 = y * Math.sin(tilt) + z * Math.cos(tilt), k = 3.2 / (3.2 + z2);
+      this.tx[i] = cx + x * R * k; this.ty[i] = cy + y2 * R * k; this.ta[i] = z2 > 0 ? (.45 + .55 * z2) : (.12 + z2 * .1); }
+  }
+  toGlobe(dur = 1400, stagger = 900) {
+    const R = rng(3); this.globe = new Array(this.n);
+    for (let i = 0; i < this.n; i++) { const u = R() * 2 - 1; this.globe[i] = [R() * 6.2832, Math.asin(u)]; this.delay[i] = R() * stagger; }
+    this.mode = 'globe'; return this._startMorph(dur, stagger);
+  }
+  toFly(dur = 1100, stagger = 500) { this.mode = 'fly'; this.shape = 'fly'; const R = rng(4); for (let i = 0; i < this.n; i++) this.delay[i] = R() * stagger; return this._startMorph(dur, stagger); }
   _bustTargets(t) {
     const r = this.bustRect, n = this.n; if (!r) return;
     for (let i = 0; i < n; i++) { const b = this.bust[i];
@@ -260,7 +278,7 @@ class ButterflyField {
   /* ---- per frame ---- */
   update(t, dt) {
     if (!REDUCED) this.lead += dt; else this.lead = this.flap.period * .3;
-    if (this.shape === 'fly') this._flyTargets(t); else this._bustTargets(t);
+    if (this.mode === 'globe') this._globeTargets(t); else if (this.mode === 'logo') this._logoTargets(t); else if (this.shape === 'fly') this._flyTargets(t); else this._bustTargets(t);
     this._ripple *= Math.pow(.25, dt / 1000);
     const m = this.morph, n = this.n, dr = REDUCED ? 0 : this.drift, rp = this._ripple;
     for (let i = 0; i < n; i++) {
@@ -354,4 +372,8 @@ export function watch(fn) {
   Clock.start();
   return () => { drawers.delete(fn); if (!drawers.size) Clock.stop(); };
 }
-export { Clock, ButterflyField, TicketPoof, BUST_ASPECT, Ease, tween, wait };
+export { rng, Clock, ButterflyField, TicketPoof, BUST_ASPECT, Ease, tween, wait };
+// Pause every particle loop while the tab is hidden; resume where it left off.
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => {
+  if (document.hidden) Clock.stop(); else if (drawers.size) Clock.start();
+});

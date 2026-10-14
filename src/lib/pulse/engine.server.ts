@@ -1,5 +1,6 @@
 import { getSql, type Sql } from "@/lib/db";
 import { cents, estimateReturn, LENGTHS, shareOfPool, stakesFor, windowBounds, type LengthMin, type Side } from "./math";
+import { AVATARS, type AvatarId } from "./types";
 import type {
   ActivityItem,
   Feed,
@@ -937,8 +938,9 @@ export async function loadProfile(userId: string): Promise<ProfileSnap | null> {
     prediction_points: number;
     referral_code: string;
     referral_points: number;
+    avatar: string | null;
   }>`
-    select display_name, username, image, member_no, created_at, prediction_points, referral_code, referral_points
+    select display_name, username, image, member_no, created_at, prediction_points, referral_code, referral_points, avatar
     from profiles where user_id = ${userId}
   `;
   const p = rows[0];
@@ -993,6 +995,8 @@ export async function loadProfile(userId: string): Promise<ProfileSnap | null> {
     username: p.username,
     image: p.image,
     memberNo: `USER_${String(num(p.member_no)).padStart(5, "0")}`,
+    avatar: (AVATARS as readonly string[]).includes(p.avatar ?? "") ? (p.avatar as AvatarId) : null,
+    lastSide: await lastSideFor(sql, userId),
     sinceYear: new Date(iso(p.created_at)).getUTCFullYear(),
     points: num(p.prediction_points),
     calls: num(callsRow[0]?.calls),
@@ -1004,4 +1008,19 @@ export async function loadProfile(userId: string): Promise<ProfileSnap | null> {
     friends: num(friends[0]?.n),
     referralPoints: num(p.referral_points),
   };
+}
+
+async function lastSideFor(sql: Sql, userId: string): Promise<Side | null> {
+  const rows = await sql<{ side: Side }>`
+    select side from positions where user_id = ${userId} order by created_at desc limit 1
+  `;
+  return rows[0]?.side ?? null;
+}
+
+export async function setAvatar(userId: string, avatar: string): Promise<{ ok: boolean }> {
+  if (!(AVATARS as readonly string[]).includes(avatar)) return { ok: false };
+  const sql = await getSql();
+  await ensureProfile(userId);
+  await sql`update profiles set avatar = ${avatar} where user_id = ${userId}`;
+  return { ok: true };
 }

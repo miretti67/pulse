@@ -141,6 +141,8 @@ export type ProfileSnap = {
   referralCode: string;
   friends: number;
   referralPoints: number;
+  avatar: AvatarId | null;
+  lastSide: Side | null;
 };
 
 export type PlaceResult =
@@ -149,3 +151,6 @@ export type PlaceResult =
       ok: false;
       reason: "locked" | "balance" | "already" | "closed" | "unavailable" | "rejected" | "stale";
     };
+
+export const AVATARS = ["hood", "bot", "cat", "punk", "astro"] as const;
+export type AvatarId = (typeof AVATARS)[number];
