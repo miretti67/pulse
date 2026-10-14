@@ -228,3 +228,115 @@
 body:has([data-intro-cover]) nav[aria-label="Primary"] {
   display: none;
 }
+
+/* ===================================================================
+   First-run intro, ported verbatim from the approved reference
+   (/workspace/pulse/anim/pulse_intro.html). Scoped under .pi so it can't
+   leak into the app. Values are the reference's; don't restyle here.
+   =================================================================== */
+.pi {
+  --bg: #080808; --bg2: #0d0d0d; --surface: #111111; --elev: #161616;
+  --text: #f1f0ea; --text2: #92928d; --muted: #5c5c58;
+  --border: #2d2d2d; --border2: #1d1d1d;
+  --red: #e83d43; --down: #7d2028; --up: #a8e63a;
+  --display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  position: fixed; inset: 0; z-index: 40; background: var(--bg); color: var(--text);
+  font-family: var(--display); -webkit-font-smoothing: antialiased; overflow: hidden;
+}
+.pi * { box-sizing: border-box; margin: 0; padding: 0; }
+.pi button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; text-align: left; }
+.pi button:focus-visible, .pi input:focus-visible { outline: 1px solid var(--text); outline-offset: 3px; }
+.pi .pi-app { position: relative; width: 100%; max-width: 430px; height: 100%; margin: 0 auto; overflow: hidden; background: var(--bg); }
+@media (min-width: 600px) { .pi .pi-app { border-left: 1px solid var(--border2); border-right: 1px solid var(--border2); } }
+.pi .pi-app::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5; opacity: .045;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"); }
+.pi .pi-field { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.pi .screen { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column;
+  padding: max(20px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+  /* reference show(): new screen waits 140ms, then fades in over 320ms (outCubic) rising 6px */
+  animation: pi-in 320ms cubic-bezier(.33, 1, .68, 1) 140ms both; }
+.pi .screen.first { animation: none; }
+.pi .topbar { display: flex; justify-content: space-between; align-items: center; height: 28px; }
+.pi .mono { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--text2); }
+.pi .skip { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--text2); padding: 12px 0 12px 16px; margin-right: -4px; }
+.pi .mark { font-family: var(--display); font-weight: 700; font-size: 20px; letter-spacing: -.01em; }
+.pi h1 { font-family: var(--display); font-weight: 700; text-transform: uppercase; font-size: 44px; line-height: .94; letter-spacing: -.025em; }
+.pi h1.md { font-size: 38px; }
+.pi .sub { font-family: var(--mono); font-size: 12.5px; line-height: 1.55; color: var(--text2); letter-spacing: .01em; }
+.pi .spacer { flex: 1; }
+.pi .footer { font-family: var(--mono); font-size: 10px; letter-spacing: .14em; color: var(--text2); text-transform: uppercase; }
+.pi .btn { display: flex; align-items: center; justify-content: space-between; width: 100%; height: 52px; padding: 0 16px;
+  font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; border: 1px solid var(--border); background: rgba(8, 8, 8, .55); }
+.pi .btn:active { background: var(--elev); }
+.pi .btn.solid { background: var(--text); color: #080808; border-color: var(--text); }
+.pi .btn[disabled] { opacity: .35; cursor: default; }
+.pi .btn .ar { font-size: 14px; letter-spacing: 0; }
+.pi .link { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--text2); text-transform: uppercase; padding: 14px 0;
+  text-decoration: underline; text-underline-offset: 4px; text-decoration-color: var(--border); }
+.pi .stack > * + * { margin-top: 8px; }
+/* welcome: copy lines fade in 420ms rising 8px, 90ms apart */
+.pi .copy > * { opacity: 0; }
+.pi .copy.on > * { animation: pi-in-8 420ms cubic-bezier(.33, 1, .68, 1) both; }
+.pi .copy.on > :nth-child(2) { animation-delay: 90ms; }
+.pi .copy.on > :nth-child(3) { animation-delay: 180ms; }
+.pi .copy.on > :nth-child(4) { animation-delay: 270ms; }
+.pi .s-welcome h1 { margin-top: 20px; }
+.pi .s-welcome .sub { margin-top: 16px; }
+.pi .s-welcome .tap { margin-top: 36px; }
+/* explainer */
+.pi .beat { position: relative; height: 176px; animation: pi-in-8 280ms cubic-bezier(.33, 1, .68, 1) both; }
+.pi .beat .num { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--text2); }
+.pi .beat h1 { margin-top: 14px; }
+.pi .beat .sub { margin-top: 14px; max-width: 300px; }
+.pi .dots { display: flex; gap: 6px; margin: 28px 0 20px; }
+.pi .dots i { display: block; width: 16px; height: 2px; background: var(--border); }
+.pi .dots i.on { background: var(--text); }
+.pi .hint { font-family: var(--mono); font-size: 10px; letter-spacing: .14em; color: var(--text2); text-transform: uppercase; height: 52px; display: flex; align-items: center; }
+.pi .fade200 { animation: pi-in 200ms cubic-bezier(.33, 1, .68, 1) both; }
+/* sign-in */
+.pi .s-signin .head { margin-top: auto; }
+.pi .s-signin .sub { margin-top: 12px; }
+.pi .s-signin .stack { margin-top: 32px; }
+.pi .sent { border: 1px solid var(--border); padding: 16px; margin-top: 32px; animation: pi-in 250ms cubic-bezier(.33, 1, .68, 1) both; }
+.pi .sent b { font-family: var(--mono); font-weight: 500; font-size: 12px; letter-spacing: .14em; }
+.pi .sent p { margin-top: 6px; }
+.pi .note { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--red); margin-top: 12px; }
+/* username */
+.pi .field { display: flex; align-items: center; height: 56px; border-bottom: 1px solid var(--text2); margin-top: 32px; }
+.pi .field span { font-family: var(--display); font-size: 24px; color: var(--text2); }
+.pi .field input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: 0; color: var(--text); font-family: var(--display); font-size: 24px; letter-spacing: -.01em; padding-left: 2px; }
+.pi .field input::placeholder { color: var(--muted); }
+.pi .err { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--red); height: 28px; padding-top: 10px; }
+.pi .un-form.out { opacity: 0; pointer-events: none; transition: opacity 240ms cubic-bezier(.33, 1, .68, 1); }
+.pi .un-done { position: absolute; left: 20px; right: 20px; bottom: 40px; animation: pi-in-8 420ms cubic-bezier(.33, 1, .68, 1) 240ms both; }
+.pi .un-done h1 { font-size: 30px; margin-top: 10px; }
+.pi .loading-note { position: absolute; left: 0; right: 0; bottom: 64px; text-align: center; z-index: 2; }
+@keyframes pi-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes pi-in-8 { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .pi .screen, .pi .copy.on > *, .pi .beat, .pi .sent, .pi .un-done, .pi .fade200 { animation: none; opacity: 1; }
+}
+
+/* Call ticket, ported verbatim from the reference (.ticket / .t-*). */
+.pt { position: relative; display: flex; height: 168px; margin-top: 28px; transform-origin: 50% 100%; }
+.pt-stub, .pt-body { position: relative; background: #0b0b0b; border: 1px solid #f1f0ea; }
+.pt-stub { width: 104px; border-right: 0; padding: 14px 12px; display: flex; flex-direction: column; justify-content: space-between; }
+.pt-perf { width: 0; border-left: 1px dashed #92928d; position: relative; }
+.pt-perf::before, .pt-perf::after { content: ""; position: absolute; left: -9px; width: 18px; height: 9px; background: #080808; border: 1px solid #f1f0ea; }
+.pt-perf::before { top: -1px; border-top: 0; border-radius: 0 0 9px 9px; }
+.pt-perf::after { bottom: -1px; border-bottom: 0; border-radius: 9px 9px 0 0; }
+.pt-body { flex: 1; min-width: 0; border-left: 0; padding: 14px 34px 12px 14px; transform-origin: 50% 50%; }
+.pt-body::before { content: ""; position: absolute; inset: 5px; border: 1px solid #2d2d2d; pointer-events: none; }
+.pt-vert { position: absolute; right: 6px; top: 0; bottom: 0; writing-mode: vertical-rl; font-family: var(--font-mono); font-size: 10px; letter-spacing: .24em; color: #92928d; display: flex; align-items: center; justify-content: center; }
+.pt-serial { position: absolute; right: 34px; top: 12px; font-family: var(--font-mono); font-size: 10px; color: #92928d; letter-spacing: .1em; }
+.pt-row { font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em; color: #92928d; text-transform: uppercase; line-height: 1.7; }
+.pt-row b { color: #f1f0ea; font-weight: 500; }
+.pt-side { font-family: var(--font-display); font-weight: 700; font-size: 26px; letter-spacing: -.02em; }
+.pt-bar { height: 16px; margin-top: 6px; opacity: .8;
+  background: repeating-linear-gradient(90deg, #f1f0ea 0 1px, transparent 1px 3px, #f1f0ea 3px 5px, transparent 5px 6px, #f1f0ea 6px 7px, transparent 7px 10px); }
+.pt-red { position: absolute; left: 12px; bottom: 12px; width: 8px; height: 8px; background: #e83d43; }
+/* reference callSide(): prints up from the CTA, 40px -> 0 and 0 -> 1 opacity over 250ms (outCubic) */
+.pt-print { animation: pt-print 250ms cubic-bezier(.33, 1, .68, 1) both; }
+@keyframes pt-print { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .pt-print { animation: none; } }

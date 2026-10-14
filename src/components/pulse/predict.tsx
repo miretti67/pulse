@@ -119,7 +119,8 @@ export function PredictScreen() {
   const ready = !!q.data;
   useEffect(() => {
     if (released.current || intro !== false || !ready) return;
-    const min = reduced ? 0 : 1200;
+    // loader butterfly forms in ~1.95s; hold it at least 2.1s so it is fully formed and flapping
+    const min = reduced ? 0 : 2100;
     const wait = Math.max(0, min - (performance.now() - opened.current));
     const t = window.setTimeout(() => {
       released.current = true;
@@ -530,7 +531,7 @@ function LiveMarket({
         {position && phase === "idle" ? (
           <PositionCard market={market} position={position} />
         ) : phase !== "idle" && side && stake ? (
-          <div className={phase === "tear" && reduced ? "ticket-tear" : "ticket-print"}>
+          <div className={phase === "tear" && reduced ? "ticket-tear" : "pt-print"}>
             <Ticket
               market={market}
               side={side}
@@ -908,49 +909,49 @@ function Ticket({
   hideBody?: boolean;
 }) {
   const up = side === "up";
+  // Structure and styling mirror the reference ticket (.pt in styles.css): stub, die-cut
+  // perforation, body with inner frame, serial, barcode, vertical label, single red detail.
   return (
-    <article className={`relative border bg-surface ${steady ? "border-line" : "border-line"}`}>
-      <span className="absolute -top-2 left-16 size-4 -translate-x-1/2 rounded-full border border-line bg-bg" aria-hidden />
-      <span className="absolute -bottom-2 left-16 size-4 -translate-x-1/2 rounded-full border border-line bg-bg" aria-hidden />
-      <div className="grid grid-cols-[3.5rem_1fr_1.75rem]">
-        <div className="flex items-center justify-center border-r border-dashed border-line">
-          <span className="rotate-180 font-mono text-meta text-secondary [writing-mode:vertical-rl]">PULSE</span>
+    <article className={`pt${steady ? " steady" : ""}`}>
+      <div className="pt-stub">
+        <div>
+          <p className="pt-row">YOUR CALL</p>
+          <p className="pt-side">{up ? "UP ↑" : "DOWN ↓"}</p>
         </div>
-        <div data-ticket-body className={`px-3 py-4 ${hideBody ? "invisible" : ""}`}>
-          <div className="flex items-start justify-between gap-2">
-            <p className="font-mono text-meta text-secondary">
-              PULSE / {market.code}
-            </p>
-            <p className="font-mono text-meta text-muted">{serial}</p>
-          </div>
-          <p className="mt-3 font-mono text-meta text-secondary">BTC / USD</p>
-          <p className={`mt-1 font-display text-3xl tracking-tight ${up ? "text-up" : "text-pulse"}`}>
-            {sideLabel(side)}
+        <div>
+          <p className="pt-row">
+            <b>{formatPts(stake)}</b>
           </p>
-          <p className="mt-2 font-display text-xl tabular-nums">{formatPts(stake)}</p>
-          <dl className="mt-4 space-y-1 font-mono text-meta text-secondary">
-            <div className="flex justify-between gap-3">
-              <dt>OPEN</dt>
-              <dd className="text-fg">{market.openPrice != null ? formatPrice(market.openPrice) : "—"}</dd>
-            </div>
-            <div className="flex justify-between gap-3">
-              <dt>SHARE OF {up ? "UP" : "DOWN"} POOL</dt>
-              <dd className="text-fg">{share != null ? `${share.toFixed(1)}%` : "—"}</dd>
-            </div>
-            <div className="flex justify-between gap-3">
-              <dt>EST. RETURN IF CLOSED NOW</dt>
-              <dd className="text-fg">{est != null ? `~${formatPts(est)}` : "—"}</dd>
-            </div>
-          </dl>
-          <p className="mt-3 font-mono text-meta text-muted">CHANGES UNTIL CLOSE</p>
-          <p className="mt-3 font-mono text-meta text-fg">{market.status === "open" ? "POSITION ACTIVE" : "POSITION LOCKED"}</p>
-          <div className="barcode mt-4" aria-hidden />
-          <p className="sr-only">Decorative barcode</p>
-        </div>
-        <div className="flex items-center justify-center border-l border-line">
-          <span className="font-mono text-meta text-pulse [writing-mode:vertical-rl]">{market.code}</span>
+          <p className="pt-row">
+            POSITION
+            <br />
+            {market.status === "open" ? "ACTIVE" : "LOCKED"}
+          </p>
         </div>
       </div>
+      <div className="pt-perf" />
+      <div data-ticket-body className={`pt-body${hideBody ? " invisible" : ""}`}>
+        <span className="pt-serial">{serial}</span>
+        <p className="pt-row">
+          <b>PULSE / {market.code} · {market.lengthMin}M</b>
+        </p>
+        <p className="pt-row">BTC / USD</p>
+        <p className="pt-row">
+          OPEN <b>{market.openPrice != null ? formatPrice(market.openPrice) : "—"}</b>
+        </p>
+        <p className="pt-row">
+          SHARE OF {up ? "UP" : "DOWN"} POOL <b>{share != null ? `${share.toFixed(1)}%` : "—"}</b>
+        </p>
+        <p className="pt-row">
+          EST. RETURN IF CLOSED NOW <b>{est != null ? `~${formatPts(est)}` : "—"}</b>
+        </p>
+        <div className="pt-bar" aria-hidden />
+        <span className="pt-vert" aria-hidden>
+          PULSE PASS
+        </span>
+        <span className="pt-red" aria-hidden />
+      </div>
+      <p className="sr-only">{sideLabel(side)}</p>
     </article>
   );
 }
