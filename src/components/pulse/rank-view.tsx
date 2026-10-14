@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { getRank } from "@/lib/pulse/api";
+import { getRank, useDemo } from "@/lib/pulse/source";
 import { formatPts } from "@/lib/pulse/format";
 import type { RankBoard } from "@/lib/pulse/types";
 
@@ -9,9 +9,11 @@ export function RankScreen() {
   const [on, setOn] = useState(false);
   useEffect(() => setOn(true), []);
   const { user } = useCurrentUserState();
+  const demo = useDemo();
   const [board, setBoard] = useState<RankBoard>("main");
   const q = useQuery({
-    queryKey: ["rank", board, user?.id ?? "anon"],
+    queryKey: ["rank", board, demo ? "demo" : user?.id ?? "anon"],
+    refetchInterval: demo ? 3000 : undefined,
     queryFn: () => getRank({ data: { board } }),
     enabled: on,
   });

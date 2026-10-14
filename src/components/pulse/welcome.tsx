@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { signIn } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { claimUsername, saveAvatar } from "@/lib/pulse/api";
+import { demoPulse, demoSetAvatar, demoSetUsername, isDemoOn } from "@/lib/pulse/demo";
 import { useReducedMotion } from "@/lib/pulse/telegram";
 import { AVATARS, type AvatarId } from "@/lib/pulse/types";
 import { BUSTS } from "@/lib/pulse/dustbust";
@@ -62,10 +63,19 @@ export function Welcome({ onDone }: { onDone: () => void }) {
       field.opacity = 0;
       field.drift = 0;
       const heads = makeHeads();
+      // Demo Mode: heads mirror the live crowd split (share calling UP on the 15M market).
+      let share: number | null = null;
+      let lastShare = 0;
       stop = motion.watch((t: number, dt: number) => {
         field.update(t, dt);
         field.render();
-        drawHeads(fxRef.current, field, heads, t);
+        if (isDemoOn() && t - lastShare > 1000) {
+          lastShare = t;
+          const m = demoPulse().market;
+          const tot = m ? m.upPool + m.downPool : 0;
+          share = tot ? m!.upPool / tot : null;
+        }
+        drawHeads(fxRef.current, field, heads, t, share);
       });
       setBooted(true);
     });
@@ -163,6 +173,7 @@ export function Welcome({ onDone }: { onDone: () => void }) {
       /* ignore */
     }
     if (user) void saveAvatar({ data: { avatar } }).catch(() => {});
+    if (isDemoOn()) { demoSetAvatar(avatar); demoSetUsername(name); }
     setScreen("landed");
     window.setTimeout(onDone, reduced ? 400 : 2200);
   }
@@ -417,7 +428,7 @@ function makeHeads(): Head[] {
   };
   return Array.from({ length: 22 }, () => ({ th: R() * 6.28, ph: (R() - 0.5) * 1.4, flip: R() * 3000, s: 3 + R() * 1.8 }));
 }
-function drawHeads(c: HTMLCanvasElement | null, field: Field, heads: Head[], t: number) {
+function drawHeads(c: HTMLCanvasElement | null, field: Field, heads: Head[], t: number, share: number | null = null) {
   if (!c) return;
   const g = c.getContext("2d");
   if (!g) return;
@@ -439,7 +450,11 @@ function drawHeads(c: HTMLCanvasElement | null, field: Field, heads: Head[], t: 
     const y2 = y * Math.cos(tilt) - z * Math.sin(tilt), z2 = y * Math.sin(tilt) + z * Math.cos(tilt);
     if (z2 < 0.05) continue;
     const k = 3.2 / (3.2 + z2), px = cx + x * R0 * k, py = cy + y2 * R0 * k, s = h.s * k;
-    g.fillStyle = ((t + h.flip) / 420) % 2 | 0 ? "#7D2028" : "#A8E63A";
+    const i = heads.indexOf(h);
+    // occasional head "changes its mind" so the globe still flickers
+    const blink = ((((t + h.flip) / 1700) | 0) % 6) === 0;
+    const up = share == null ? (((t + h.flip) / 420) | 0) % 2 === 0 : (i / heads.length < share) !== blink;
+    g.fillStyle = up ? "#A8E63A" : "#7D2028";
     g.fillRect(px - s / 2, py - s, s, s);
     g.fillRect(px - s, py - s * 2.4, s * 2, s * 1.3);
   }
@@ -579,6 +594,7 @@ function SignStep({
           crowd.
         </h1>
         <p className="mono sub">ONE NAME. EVERY MARKET.</p>
+        {isDemoOn() ? <p className="mono sub" data-demo-crowd>DEMO · 1,000 PLAYERS ALREADY IN</p> : null}
       </div>
       {sent ? (
         <div className="sent">

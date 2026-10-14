@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { PriceSheet } from "./price-sheet";
+import { getPulse, placeCall, useDemo } from "@/lib/pulse/source";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { getPulse, placeCall } from "@/lib/pulse/api";
 import { formatClock, formatPct, formatPrice, formatPts, formatSignedPts, formatUtc, sideLabel } from "@/lib/pulse/format";
 import { stakesFor, type LengthMin, type Side } from "@/lib/pulse/math";
 import { haptic, useReducedMotion } from "@/lib/pulse/telegram";
@@ -72,11 +72,12 @@ const SIDE_KEY = "pulse-last-side";
 
 export function PredictScreen() {
   const { user, isPending } = useCurrentUserState();
+  const demo = useDemo();
   const reduced = useReducedMotion();
   const q = useQuery({
-    queryKey: ["pulse", user?.id ?? "anon"],
+    queryKey: ["pulse", demo ? "demo" : user?.id ?? "anon"],
     queryFn: () => getPulse(),
-    refetchInterval: 2000,
+    refetchInterval: demo ? 1000 : 2000,
   });
   const opened = useRef(0);
   const released = useRef(false);
@@ -164,7 +165,7 @@ export function PredictScreen() {
             snap={q.data}
             receivedAt={q.dataUpdatedAt}
             authPending={isPending}
-            signedIn={!!user}
+            signedIn={!!user || demo}
             updating={q.isFetching}
           />
         </div>
@@ -230,7 +231,7 @@ function PredictBody({
   if (!market && markets.length) {
     return (
       <section className="pb-8">
-        <MarketRows markets={markets} length={length} onLength={setLength} serverNow={serverNow} holds={snap.me?.holds ?? []} />
+        <DemoBadge /><MarketRows markets={markets} length={length} onLength={setLength} serverNow={serverNow} holds={snap.me?.holds ?? []} />
         <div data-no-market className="mt-6 border border-line px-4 py-8">
           <p className="font-mono text-meta text-secondary">{length}M MARKET</p>
           <h1 className="mt-3 font-display text-title">NO MARKET YET.</h1>
@@ -464,7 +465,7 @@ function LiveMarket({
         feed={snap.feed}
         onReplay={() => setReplay(true)}
       />
-      <MarketRows markets={markets} length={length} onLength={onLength} serverNow={serverNow} holds={snap.me?.holds ?? []} />
+      <DemoBadge /><MarketRows markets={markets} length={length} onLength={onLength} serverNow={serverNow} holds={snap.me?.holds ?? []} />
       <div className="md:grid md:grid-cols-2 md:items-start md:gap-12">
       <div>
       <div className="relative mt-5">
@@ -1102,6 +1103,16 @@ function ResultView({ call, onNext }: { call: SettledCall; onNext: () => void })
         </>
       ) : null}
     </section>
+  );
+}
+
+function DemoBadge() {
+  const on = useDemo();
+  if (!on) return null;
+  return (
+    <p data-demo-badge className="mt-3 font-mono text-meta">
+      <span className="border border-fg px-2 py-1 text-fg">DEMO · 1,001 PLAYERS · LIVE BTC</span>
+    </p>
   );
 }
 

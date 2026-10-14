@@ -3,7 +3,9 @@ import { useEffect, useState } from "react";
 import { authEnabled, signOut } from "@/lib/auth/client";
 import { hasGateSessionMarker } from "@/lib/auth/gate-session-marker";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { getProfile, syncProfile } from "@/lib/pulse/api";
+import { syncProfile } from "@/lib/pulse/api";
+import { getProfile, useDemo } from "@/lib/pulse/source";
+import { DemoToggle } from "./demo-toggle";
 import { formatPts } from "@/lib/pulse/format";
 import { telegram } from "@/lib/pulse/telegram";
 import { Art, SignInBlock } from "./chrome";
@@ -13,6 +15,7 @@ export function MeScreen() {
   const [on, setOn] = useState(false);
   useEffect(() => setOn(true), []);
   const { user, isPending } = useCurrentUserState();
+  const demo = useDemo();
   const qc = useQueryClient();
 
   useEffect(() => {
@@ -41,12 +44,13 @@ export function MeScreen() {
       </section>
     );
   }
-  if (!user) return <SignInBlock kicker="MEMBERSHIP" title="THIS ONE IS YOURS." />;
+  if (!user && !demo) return <SignInBlock kicker="MEMBERSHIP" title="THIS ONE IS YOURS." />;
   return <ProfileLive />;
 }
 
 function ProfileLive() {
-  const q = useQuery({ queryKey: ["profile"], queryFn: () => getProfile() });
+  const demo = useDemo();
+  const q = useQuery({ queryKey: ["profile", demo ? "demo" : "real"], queryFn: () => getProfile(), refetchInterval: demo ? 3000 : false });
   const [copied, setCopied] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [gate, setGate] = useState(false);
@@ -137,6 +141,7 @@ function ProfileLive() {
         {note ? <p className="mt-2 font-mono text-meta text-secondary">{note}</p> : null}
       </div>
 
+      <DemoToggle />
       {authEnabled && !gate ? (
         <button
           type="button"

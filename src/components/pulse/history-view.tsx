@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { getHistory } from "@/lib/pulse/api";
+import { getHistory, useDemo } from "@/lib/pulse/source";
 import { formatPrice, formatPts, formatSignedPts, formatUtc, outcomeWord, sideLabel } from "@/lib/pulse/format";
 import { useTelegramBack } from "@/lib/pulse/telegram";
 import type { HistoryDetail, HistoryRow } from "@/lib/pulse/types";
@@ -13,6 +13,7 @@ export function HistoryScreen() {
   const [on, setOn] = useState(false);
   useEffect(() => setOn(true), []);
   const { user, isPending } = useCurrentUserState();
+  const demo = useDemo();
   const [filter, setFilter] = useState<"ALL" | 1 | 5 | 15>("ALL");
   const [code, setCode] = useState<string | null>(null);
   const back = () => setCode(null);
@@ -26,7 +27,7 @@ export function HistoryScreen() {
       </section>
     );
   }
-  if (!user) return <SignInBlock kicker="ARCHIVE" title="YOUR CALLS LIVE HERE." />;
+  if (!user && !demo) return <SignInBlock kicker="ARCHIVE" title="YOUR CALLS LIVE HERE." />;
 
   return <HistoryLive code={code} filter={filter} onFilter={setFilter} onOpen={setCode} onBack={back} />;
 }
@@ -44,8 +45,10 @@ function HistoryLive({
   onOpen: (code: string) => void;
   onBack: () => void;
 }) {
+  const demo = useDemo();
   const q = useQuery({
-    queryKey: ["history", code],
+    queryKey: ["history", code, demo ? "demo" : "real"],
+    refetchInterval: demo ? 3000 : undefined,
     queryFn: () => getHistory({ data: { code } }),
   });
   if (q.isPending || !q.data) {
