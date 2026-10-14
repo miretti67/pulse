@@ -87,32 +87,15 @@ export function Welcome({ onDone }: { onDone: () => void }) {
   useEffect(() => {
     const field = fieldRef.current;
     if (!field || !booted) return;
-    if (screen === "landed") {
-      const aspect = 638 / 440;
-      const s = Math.min(230, field.w * 0.58);
-      const rect = {
-        x: (field.w - s * aspect * 0.72) / 2,
-        y: field.h * 0.1,
-        w: s * aspect * 0.72,
-        h: s * 0.66,
-      };
-      void field.setBackground(false, 180);
-      void field.flyTo(0.5, 0.26, Math.min(148, field.w * 0.38), reduced ? 0 : 800).then(() => {
-        if (reduced) {
-          field.dissolve(rect, { dur: 0, stagger: 0 });
-          return;
-        }
-        return field.dissolve(rect, { dur: 900, stagger: 420 });
-      });
-      return;
-    }
+    // The butterfly lives on the welcome screen only. Explainer, sign-in, email and username are
+    // plain black: fade the field out as soon as we leave welcome (no background butterfly, no
+    // fly-to/dissolve transition on landing).
     if (screen === "welcome") {
-      void field.setBackground(false, 400);
+      void field.setOpacity(1, reduced ? 0 : 400);
       void field.setPose({ cx: 0.5, cy: 0.3, size: Math.min(156, field.w * 0.42) }, reduced ? 0 : 500);
       return;
     }
-    void field.setBackground(true, reduced ? 0 : 500);
-    void field.setPose({ cx: 0.5, cy: 0.16, size: Math.min(300, field.w * 0.78) }, reduced ? 0 : 700);
+    void field.setOpacity(0, reduced ? 0 : 400);
   }, [booted, reduced, screen]);
 
   useEffect(() => {
@@ -137,7 +120,7 @@ export function Welcome({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-40 bg-bg text-fg">
+    <div data-intro-cover className="fixed inset-0 z-40 bg-bg text-fg">
       <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden />
       <div className="relative z-10 mx-auto flex h-full w-full max-w-[430px] flex-col px-5 pb-6 pt-[max(1.25rem,env(safe-area-inset-top))]">
         <div className="flex h-7 items-center justify-between">
@@ -294,6 +277,7 @@ type Field = {
   form: (opts: { from: string; dur: number; stagger: number }) => void;
   finish: () => void;
   setBackground: (on: boolean, dur?: number) => Promise<unknown>;
+  setOpacity: (a: number, dur?: number) => Promise<unknown>;
   setPose: (pose: { cx: number; cy: number; size: number }, dur?: number) => Promise<unknown>;
   flyTo: (cx: number, cy: number, size: number, dur?: number) => Promise<unknown>;
   dissolve: (rect: { x: number; y: number; w: number; h: number }, opts: { dur: number; stagger: number }) => Promise<unknown>;
@@ -456,7 +440,7 @@ export function ButterflyLoad({ tint, slow }: { tint: "none" | "up" | "down"; sl
   }, [reduced, tint]);
 
   return (
-    <div className="fixed inset-0 z-40 bg-bg text-fg">
+    <div data-intro-cover className="fixed inset-0 z-40 bg-bg text-fg">
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" aria-hidden />
       {slow ? (
         <p className="absolute inset-x-0 bottom-16 text-center font-mono text-meta tracking-[0.14em] text-secondary">
@@ -471,7 +455,7 @@ export function ButterflyLoad({ tint, slow }: { tint: "none" | "up" | "down"; sl
 export function LineReplay({ onClose }: { onClose: () => void }) {
   const [beat, setBeat] = useState(0);
   return (
-    <div className="fixed inset-0 z-40 bg-bg text-fg">
+    <div data-intro-cover className="fixed inset-0 z-40 bg-bg text-fg">
       <div className="relative z-10 mx-auto flex h-full w-full max-w-[430px] flex-col px-5 pb-6 pt-[max(1.25rem,env(safe-area-inset-top))]">
         <div className="flex justify-end">
           <button type="button" onClick={onClose} className="font-mono text-meta tracking-[0.14em] text-secondary">

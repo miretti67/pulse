@@ -221,3 +221,10 @@
     animation: none !important;
   }
 }
+
+/* Intro (welcome, explainer, sign-in, username) and the butterfly loading screen cover the whole
+   app. The page scroller is its own stacking context, so z-index alone can't put the cover over
+   the nav; hide both navs while any cover is mounted (works in SSR markup too, no JS needed). */
+body:has([data-intro-cover]) nav[aria-label="Primary"] {
+  display: none;
+}
