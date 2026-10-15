@@ -1036,6 +1036,7 @@ function PositionCard({
         spec={{
           kind: "call",
           code: market.code,
+          lengthMin: market.lengthMin,
           side: position.side,
           openPrice: market.openPrice,
           stake: position.stake,
@@ -1177,13 +1178,15 @@ function ResultView({ call, onNext }: { call: SettledCall; onNext: () => void })
           <ShareActions
             spec={{
               kind: "result",
-              code: call.code,
+              code: call.code, lengthMin: call.lengthMin,
               side: call.side,
               openPrice: call.openPrice,
               closePrice: call.closePrice,
               outcome: call.outcome,
               net: call.net,
               stake: call.stake,
+              upPool: call.upPool,
+              downPool: call.downPool,
             }}
           />
           <button type="button" onClick={onNext} className="mt-3 h-12 w-full bg-fg font-display text-base text-bg">

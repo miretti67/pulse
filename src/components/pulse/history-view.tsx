@@ -176,13 +176,15 @@ function Detail({ row, onBack }: { row: HistoryDetail; onBack: () => void }) {
       <ShareActions
         spec={{
           kind: row.live ? "call" : "result",
-          code: row.code,
+          code: row.code, lengthMin: row.lengthMin,
           side: row.side,
           openPrice: row.openPrice,
           closePrice: row.closePrice,
           outcome: row.outcome,
           net: row.net,
           stake: row.stake,
+          upPool: row.upPool,
+          downPool: row.downPool,
         }}
       />
     </section>

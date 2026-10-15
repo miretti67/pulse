@@ -737,10 +737,10 @@ export function demoReset() {
 
 
 /** Capture helper: invent a settled call for the real user against the latest settled 15M. */
-export function demoPlantSettled(side: Side = "up", stake = 100) {
+export function demoPlantSettled(side: Side = "up", stake = 100, length: LengthMin = 15) {
   ensureRunning();
   const s = load();
-  const m = s.markets.filter((x) => x.status === "settled" && x.lengthMin === 15).sort((a, b) => b.closesAt - a.closesAt)[0];
+  const m = s.markets.filter((x) => x.status === "settled" && x.lengthMin === length).sort((a, b) => b.closesAt - a.closesAt)[0];
   if (!m) return null;
   // wipe any prior plant for this code
   s.calls = s.calls.filter((c) => !(c.uid === USER_ID && c.code === m.code));

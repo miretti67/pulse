@@ -1,21 +1,29 @@
 import { useEffect, useState } from "react";
 import { formatPrice, outcomeWord, sideLabel } from "@/lib/pulse/format";
-import type { Side } from "@/lib/pulse/math";
+import type { LengthMin, Side } from "@/lib/pulse/math";
+import type { AvatarId } from "@/lib/pulse/types";
+import { getProfile, useDemo } from "@/lib/pulse/source";
+import { localAvatar } from "./dust-avatar";
 
 export type ShareSpec = {
   kind: "call" | "result" | "market";
   code: string;
+  /** Market length in minutes (1, 5 or 15). */
+  lengthMin?: LengthMin | null;
   side?: Side;
   openPrice?: number | null;
   closePrice?: number | null;
   outcome?: "win" | "loss" | "draw" | "void" | "cancelled" | null;
   net?: number | null;
   stake?: number | null;
+  /** Settled pools (points) for the crowd line; omit when unknown. */
+  upPool?: number | null;
+  downPool?: number | null;
 };
 
 export async function copyMarket(spec: ShareSpec): Promise<boolean> {
   const lines = [
-    `PULSE · ${spec.code} · BTC/USD`,
+    `PULSE · ${spec.lengthMin ? `${spec.lengthMin}M · ` : ""}BTC/USD · ${spec.code}`,
     spec.side ? sideLabel(spec.side) : null,
     spec.openPrice != null ? `OPEN ${formatPrice(spec.openPrice)}` : null,
     spec.closePrice != null ? `CLOSE ${formatPrice(spec.closePrice)}` : null,
@@ -63,10 +71,27 @@ function ShareSheet({ spec, onClose }: { spec: ShareSpec; onClose: () => void })
   const [includeStake, setIncludeStake] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const demo = useDemo();
+  const [who, setWho] = useState<{ username: string | null; avatar: AvatarId | null } | null>(null);
 
   useEffect(() => {
     let dead = false;
-    void drawCard(spec, includeStake).then((blob) => {
+    void getProfile()
+      .then((p) => {
+        if (!dead) setWho({ username: p?.username || null, avatar: p?.avatar ?? localAvatar() });
+      })
+      .catch(() => {
+        if (!dead) setWho({ username: null, avatar: localAvatar() });
+      });
+    return () => {
+      dead = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!who) return;
+    let dead = false;
+    void drawCard(spec, includeStake, { ...who, demo }).then((blob) => {
       if (dead || !blob) return;
       const next = URL.createObjectURL(blob);
       setUrl((prev) => {
@@ -80,9 +105,14 @@ function ShareSheet({ spec, onClose }: { spec: ShareSpec; onClose: () => void })
     // Primitives only — the parent clock re-renders often.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    who,
+    demo,
     includeStake,
+    spec.upPool,
+    spec.downPool,
     spec.kind,
     spec.code,
+    spec.lengthMin,
     spec.side,
     spec.openPrice,
     spec.closePrice,
@@ -138,84 +168,239 @@ function ShareSheet({ spec, onClose }: { spec: ShareSpec; onClose: () => void })
   );
 }
 
-async function drawCard(spec: ShareSpec, includeStake: boolean): Promise<Blob | null> {
+export type CardExtras = {
+  username?: string | null;
+  avatar?: AvatarId | null;
+  demo?: boolean;
+};
+
+const C = {
+  bg: "#080808",
+  fg: "#F1F0EA",
+  up: "#A8E63A",
+  down: "#7D2028",
+  pulse: "#E83D43",
+  secondary: "#92928D",
+  muted: "#5C5C58",
+  line: "#2D2D2D",
+};
+const DISPLAY = "'Space Grotesk', sans-serif";
+const MONO = "'JetBrains Mono', monospace";
+
+/**
+ * Crowd line from real pool data only. Pools are points, so the share is by points staked.
+ * Returns null when there is nothing honest to say (no pools, draw, void, open call).
+ */
+function crowdLine(spec: ShareSpec): string | null {
+  const up = spec.upPool ?? null;
+  const down = spec.downPool ?? null;
+  if (up == null || down == null || !spec.side) return null;
+  const total = up + down;
+  if (total <= 0 || up === 0 || down === 0) return null;
+  const mine = spec.side === "up" ? up : down;
+  const other = total - mine;
+  if (spec.outcome === "win") return `BEAT ${Math.round((other / total) * 100)}% OF THE CROWD`;
+  if (spec.outcome === "loss") return `${Math.round((other / total) * 100)}% OF THE CROWD CALLED IT`;
+  return null;
+}
+
+async function renderAvatar(id: AvatarId, tint: "up" | "down" | "none"): Promise<HTMLCanvasElement | null> {
+  try {
+    const dust = await import("@/lib/pulse/dustbust");
+    const c = document.createElement("canvas");
+    c.width = 256;
+    c.height = 256;
+    const b = new dust.DustBust(c, id, { n: 14000, seed: 7 });
+    b.setTint(tint);
+    b.tint = b.tintTo; // no fade-in for a still image
+    b.render(0);
+    return c;
+  } catch {
+    return null;
+  }
+}
+
+function fitFont(ctx: CanvasRenderingContext2D, text: string, weight: number, start: number, family: string, max: number) {
+  let size = start;
+  ctx.font = `${weight} ${size}px ${family}`;
+  while (ctx.measureText(text).width > max && size > 40) {
+    size -= 6;
+    ctx.font = `${weight} ${size}px ${family}`;
+  }
+  return size;
+}
+
+export async function drawCard(spec: ShareSpec, includeStake: boolean, extras: CardExtras = {}): Promise<Blob | null> {
   await document.fonts.ready.catch(() => undefined);
   const canvas = document.createElement("canvas");
   canvas.width = 1080;
   canvas.height = 1350;
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
-  ctx.fillStyle = "#080808";
+  const L = 96;
+  const R = 984;
+  ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, 1080, 1350);
-  ctx.strokeStyle = "#2D2D2D";
+  ctx.strokeStyle = C.line;
+  ctx.lineWidth = 2;
   ctx.strokeRect(48, 48, 984, 1254);
-  ctx.fillStyle = "#E83D43";
-  ctx.fillRect(80, 96, 18, 18);
-  ctx.fillStyle = "#F1F0EA";
-  ctx.font = "500 42px 'Space Grotesk', sans-serif";
-  ctx.fillText("PULSE", 112, 116);
-  ctx.fillStyle = "#92928D";
-  ctx.font = "400 28px 'JetBrains Mono', monospace";
-  ctx.fillText(`${spec.code}  ·  BTC/USD`, 80, 200);
-  ctx.fillStyle = "#F1F0EA";
-  ctx.font = "500 168px 'Space Grotesk', sans-serif";
-  const headline =
-    spec.outcome === "win"
-      ? "CALLED IT"
-      : spec.outcome === "loss"
-        ? "NOT THIS TIME"
-        : spec.outcome === "draw"
-          ? "DRAW"
-          : spec.outcome === "void" || spec.outcome === "cancelled"
-            ? "RETURNED"
-            : spec.side
-              ? sideLabel(spec.side)
-              : "LIVE";
-  wrap(ctx, headline, 80, 420, 920, 170);
-  ctx.fillStyle = spec.side === "down" ? "#7D2028" : spec.side === "up" ? "#A8E63A" : "#F1F0EA";
-  if (spec.side && spec.outcome == null) {
-    ctx.font = "500 64px 'Space Grotesk', sans-serif";
-    ctx.fillText(spec.side === "up" ? "↑" : "↓", 80, 620);
-  }
-  ctx.fillStyle = "#92928D";
-  ctx.font = "400 32px 'JetBrains Mono', monospace";
-  let y = 780;
-  if (spec.openPrice != null) {
-    ctx.fillText(`OPEN  ${formatPrice(spec.openPrice)}`, 80, y);
-    y += 52;
-  }
-  if (spec.closePrice != null) {
-    ctx.fillText(`CLOSE  ${formatPrice(spec.closePrice)}`, 80, y);
-    y += 52;
-  }
-  if (spec.outcome) {
-    ctx.fillStyle = "#F1F0EA";
-    ctx.fillText(outcomeWord(spec.outcome), 80, y);
-    y += 52;
-  }
-  if (includeStake && spec.stake != null) {
-    ctx.fillStyle = "#92928D";
-    ctx.fillText(`STAKE  ${spec.stake.toLocaleString("en-US")} PTS`, 80, y);
-  }
-  ctx.fillStyle = "#5C5C58";
-  ctx.font = "400 24px 'JetBrains Mono', monospace";
-  ctx.fillText("SEE THE CROWD", 80, 1220);
-  return new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/png"));
-}
 
-function wrap(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, max: number, lh: number) {
-  const words = text.split(" ");
-  let line = "";
-  let yy = y;
-  for (const w of words) {
-    const test = line ? `${line} ${w}` : w;
-    if (ctx.measureText(test).width > max && line) {
-      ctx.fillText(line, x, yy);
-      line = w;
-      yy += lh;
-    } else line = test;
+  // Mark + demo label
+  ctx.fillStyle = C.pulse;
+  ctx.fillRect(L, 100, 18, 18);
+  ctx.fillStyle = C.fg;
+  ctx.font = `500 42px ${DISPLAY}`;
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("PULSE", L + 32, 120);
+  ctx.font = `400 24px ${MONO}`;
+  ctx.textAlign = "right";
+  if (extras.demo) {
+    ctx.fillStyle = C.secondary;
+    ctx.fillText("DEMO · POINTS ONLY", R, 118);
   }
-  if (line) ctx.fillText(line, x, yy);
+  ctx.textAlign = "left";
+  ctx.fillStyle = C.secondary;
+  ctx.font = `400 26px ${MONO}`;
+  if (spec.lengthMin) {
+    // Market length, loud: "15M · BTC/USD"
+    ctx.fillStyle = C.fg;
+    ctx.font = `700 34px ${MONO}`;
+    const tag = `${spec.lengthMin}M`;
+    ctx.fillText(tag, L, 190);
+    const w = ctx.measureText(tag).width;
+    ctx.fillStyle = C.secondary;
+    ctx.font = `400 26px ${MONO}`;
+    ctx.fillText(`  ·  BTC/USD  ·  ${spec.code}`, L + w, 190);
+  } else ctx.fillText(`${spec.code}  ·  BTC/USD`, L, 190);
+
+  const settled = spec.outcome != null;
+  const win = spec.outcome === "win";
+  const loss = spec.outcome === "loss";
+  const sideCol = spec.side === "up" ? C.up : spec.side === "down" ? C.down : C.fg;
+
+  // Kicker + hero
+  const kicker = win
+    ? "CALLED IT"
+    : loss
+      ? "NOT THIS TIME"
+      : spec.outcome === "draw"
+        ? "DRAW · STAKE BACK"
+        : spec.outcome === "void" || spec.outcome === "cancelled"
+          ? "RETURNED"
+          : "MY CALL";
+  ctx.fillStyle = win ? C.up : loss ? C.down : C.fg;
+  ctx.font = `700 72px ${DISPLAY}`;
+  ctx.fillText(kicker, L, 330);
+
+  let hero: string;
+  if (settled && spec.net != null) {
+    const v = Math.trunc(spec.net);
+    hero = `${v > 0 ? "+\u200A" : v < 0 ? "−\u200A" : ""}${Math.abs(v).toLocaleString("en-US")} PTS`;
+  } else hero = spec.side ? (spec.side === "up" ? "UP ↑" : "DOWN ↓") : "LIVE";
+  ctx.fillStyle = settled ? C.fg : sideCol;
+  fitFont(ctx, hero, 600, 220, DISPLAY, R - L);
+  ctx.fillText(hero, L, 530);
+
+  ctx.font = `400 28px ${MONO}`;
+  ctx.fillStyle = C.secondary;
+  const sub = [spec.side ? `CALLED ${spec.side === "up" ? "UP ↑" : "DOWN ↓"}` : null, includeStake && spec.stake != null ? `STAKE ${spec.stake.toLocaleString("en-US")} PTS` : null]
+    .filter(Boolean)
+    .join("  ·  ");
+  if (sub) ctx.fillText(sub, L, 600);
+
+  // BTC line: open -> close (only the two real prices; no invented path)
+  const top = 640;
+  const h = 260;
+  ctx.strokeStyle = C.line;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(L, top + h);
+  ctx.lineTo(R, top + h);
+  ctx.stroke();
+  if (spec.openPrice != null) {
+    const o = spec.openPrice;
+    const c = spec.closePrice;
+    const delta = c != null ? c - o : 0;
+    const span = Math.max(Math.abs(delta), o * 0.0002);
+    const yFor = (p: number) => top + h / 2 - ((p - o) / span) * (h / 2 - 30);
+    const x0 = L + 10;
+    const x1 = c != null ? R - 150 : L + 260;
+    const y0 = yFor(o);
+    const y1 = c != null ? yFor(c) : y0;
+    // open baseline (dashed)
+    ctx.setLineDash([6, 10]);
+    ctx.strokeStyle = C.muted;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(R, y0);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // price line
+    ctx.strokeStyle = c == null ? C.fg : delta > 0 ? C.up : delta < 0 ? C.pulse : C.fg;
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+    ctx.fillStyle = C.fg;
+    for (const [x, y] of [[x0, y0], [x1, y1]] as const) {
+      ctx.beginPath();
+      ctx.arc(x, y, 9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // the user's call arrow, riding the close point
+    if (spec.side) {
+      const ax = x1 + 70;
+      const ay = y1;
+      ctx.fillStyle = sideCol;
+      ctx.beginPath();
+      if (spec.side === "up") {
+        ctx.moveTo(ax, ay - 34);
+        ctx.lineTo(ax + 30, ay + 18);
+        ctx.lineTo(ax - 30, ay + 18);
+      } else {
+        ctx.moveTo(ax, ay + 34);
+        ctx.lineTo(ax + 30, ay - 18);
+        ctx.lineTo(ax - 30, ay - 18);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  ctx.font = `400 28px ${MONO}`;
+  ctx.fillStyle = C.secondary;
+  ctx.fillText(`OPEN  ${spec.openPrice != null ? formatPrice(spec.openPrice) : "—"}`, L, top + h + 60);
+  ctx.textAlign = "right";
+  ctx.fillText(`CLOSE  ${spec.closePrice != null ? formatPrice(spec.closePrice) : "—"}`, R, top + h + 60);
+  ctx.textAlign = "left";
+
+  // Player + crowd
+  const by = 1020;
+  const av = extras.avatar ? await renderAvatar(extras.avatar, spec.side ?? "none") : null;
+  let tx = L;
+  if (av) {
+    ctx.fillStyle = "#050505";
+    ctx.fillRect(L, by, 180, 180);
+    ctx.drawImage(av, L, by, 180, 180);
+    ctx.strokeStyle = C.line;
+    ctx.strokeRect(L, by, 180, 180);
+    tx = L + 216;
+  }
+  if (extras.username) {
+    ctx.fillStyle = C.fg;
+    ctx.font = `500 44px ${DISPLAY}`;
+    ctx.fillText(`@${extras.username}`, tx, by + 70);
+  }
+  const crowd = crowdLine(spec);
+  if (crowd) {
+    ctx.fillStyle = win ? C.up : C.fg;
+    fitFont(ctx, crowd, 500, 40, MONO, R - tx);
+    ctx.fillText(crowd, tx, by + (extras.username ? 140 : 90));
+  }
+  ctx.fillStyle = C.muted;
+  ctx.font = `400 22px ${MONO}`;
+  ctx.fillText("POINTS HAVE NO CASH VALUE", L, 1262);
+  return new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/png"));
 }
 
 async function shareBlob(url: string, spec: ShareSpec) {
