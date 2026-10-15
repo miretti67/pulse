@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PriceSheet } from "./price-sheet";
 import { getPulse, placeCall, useDemo } from "@/lib/pulse/source";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { formatClock, formatPct, formatPrice, formatPts, formatSignedPts, formatUtc, sideLabel } from "@/lib/pulse/format";
-import { stakesFor, type LengthMin, type Side } from "@/lib/pulse/math";
+import { STALE_PRICE_MS, stakesFor, type LengthMin, type Side } from "@/lib/pulse/math";
 import { haptic, useReducedMotion } from "@/lib/pulse/telegram";
 import type { MarketSnap, PulseSnapshot, SettledCall } from "@/lib/pulse/types";
 import { Art, Mark, PixelBar, PriceLine, SignInBlock, TickText, Wordmark } from "./chrome";
@@ -72,6 +72,8 @@ const SIDE_KEY = "pulse-last-side";
 // Module-level: survives in-app navigation (PredictScreen unmounts/remounts) but resets on a real
 // page load. The butterfly loader and intro only ever play once per app load.
 let bootDone = false;
+// Remember the picked market across in-app navigation (resets on page load).
+let lastLength: LengthMin = 15;
 
 export function PredictScreen() {
   const { user, isPending } = useCurrentUserState();
@@ -81,6 +83,8 @@ export function PredictScreen() {
     queryKey: ["pulse", demo ? "demo" : user?.id ?? "anon"],
     queryFn: () => getPulse(),
     refetchInterval: demo ? 1000 : 2000,
+    // refetch right away when the tab comes back into view (react-query listens to visibilitychange)
+    refetchOnWindowFocus: "always",
   });
   const opened = useRef(0);
   const released = useRef(bootDone);
@@ -205,7 +209,11 @@ function PredictBody({
   signedIn: boolean;
   updating: boolean;
 }) {
-  const [length, setLength] = useState<LengthMin>(15);
+  const [length, setLengthState] = useState<LengthMin>(() => lastLength);
+  const setLength = useCallback((l: LengthMin) => {
+    lastLength = l;
+    setLengthState(l);
+  }, []);
   const [now, setNow] = useState(() => Date.now());
   const [dismissed, setDismissed] = useState<string | null>(() => {
     try {
@@ -358,7 +366,7 @@ function LiveMarket({
   const lockMs = Date.parse(market.locksAt) - serverNow;
   const urgentLimit = length === 1 ? 10000 : 60000;
   const urgent = market.status === "open" ? lockMs < urgentLimit : closeMs < urgentLimit;
-  const locked = market.status !== "open" || snap.priceAgeMs > 2000;
+  const locked = market.status !== "open" || snap.priceAgeMs > STALE_PRICE_MS;
   const total = shown.upPool + shown.downPool;
   const upPct = total > 0 ? (shown.upPool / total) * 100 : 0;
   const price = market.price;
@@ -449,7 +457,7 @@ function LiveMarket({
 
   const position = snap.me?.holds?.find((hold) => hold.code === market.code) ?? null;
   const activity = snap.activities?.find((row) => row.code === market.code)?.items ?? snap.activity;
-  const stale = snap.priceAgeMs > 2000;
+  const stale = snap.priceAgeMs > STALE_PRICE_MS;
   const crowd = useCrowdMotion(shown.participants, shown.upPool, shown.downPool, reduced);
 
   async function submit() {

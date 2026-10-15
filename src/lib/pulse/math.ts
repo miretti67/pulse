@@ -6,6 +6,9 @@ export type LengthMin = 1 | 5 | 15;
 export const LENGTHS: LengthMin[] = [1, 5, 15];
 
 export const WINDOW_MS = 15 * 60 * 1000;
+/** A price older than this pauses calls (client UI, demo and server all use it). */
+export const STALE_PRICE_MS = 3_000;
+
 export const LOCK_LEAD_MS = 60 * 1000;
 
 /** Lock lead per market length: calls close this long before the market closes.

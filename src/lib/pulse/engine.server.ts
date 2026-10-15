@@ -1,5 +1,5 @@
 import { d1Batch, dbSource, getSql, type Sql } from "@/lib/db";
-import { cents, estimateReturn, LENGTHS, shareOfPool, stakesFor, windowBounds, type LengthMin, type Side } from "./math";
+import { STALE_PRICE_MS, cents, estimateReturn, LENGTHS, shareOfPool, stakesFor, windowBounds, type LengthMin, type Side } from "./math";
 import { AVATARS, type AvatarId } from "./types";
 import type {
   ActivityItem,
@@ -844,7 +844,7 @@ export async function placeCall(userId: string, side: Side, stake: number, code:
   if (side !== "up" && side !== "down") return { ok: false, reason: "rejected" };
   const sql = await getSql();
   const { book } = await loadBook();
-  if (!book || Date.now() - book.at > 2000) return { ok: false, reason: "stale" };
+  if (!book || Date.now() - book.at > STALE_PRICE_MS) return { ok: false, reason: "stale" };
   await ensureProfile(userId);
   const markets = await sql<{ id: number; length_min: number }>`
     select id, length_min from markets where code = ${code} and status = 'open' and locks_at > now() limit 1

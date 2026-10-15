@@ -4,7 +4,7 @@
  * Markets settle on real Coinbase BTC. Demo stats never mix with real-mode data.
  */
 import { AVATARS, type AvatarId, type ActivityItem, type Feed, type HistoryDetail, type HistoryRow, type MarketSnap, type PlaceResult, type ProfileSnap, type PulseSnapshot, type RankSnap, type SettledCall } from "./types";
-import { LENGTHS, lockLeadMs, cents, estimateReturn, shareOfPool, stakesFor, windowBounds, type LengthMin, type Side } from "./math";
+import { STALE_PRICE_MS, LENGTHS, lockLeadMs, cents, estimateReturn, shareOfPool, stakesFor, windowBounds, type LengthMin, type Side } from "./math";
 
 export const DEMO_FLAG = "pulse-demo";
 export const DEMO_ENV = typeof import.meta !== "undefined" && (import.meta as { env?: Record<string, string> }).env?.VITE_PULSE_DEMO === "true";
@@ -372,6 +372,58 @@ function tickSim(now: number) {
   notify();
 }
 
+// --- Live price: Coinbase public WebSocket ticker, REST polling as fallback ---
+const WS_URL = "wss://ws-feed.exchange.coinbase.com";
+let ws: WebSocket | null = null;
+let wsAt = 0; // last socket tick
+let wsRetry = 0;
+let wsTimer = 0;
+
+function connectSocket() {
+  if (typeof WebSocket === "undefined" || !running) return;
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  window.clearTimeout(wsTimer);
+  let sock: WebSocket;
+  try { sock = new WebSocket(WS_URL); } catch { scheduleReconnect(); return; }
+  ws = sock;
+  sock.onopen = () => {
+    wsRetry = 0;
+    sock.send(JSON.stringify({ type: "subscribe", product_ids: ["BTC-USD"], channels: ["ticker"] }));
+  };
+  sock.onmessage = (ev) => {
+    try {
+      const j = JSON.parse(String(ev.data)) as { type?: string; price?: string };
+      if (j.type !== "ticker" || !j.price) return;
+      const n = Number(j.price);
+      if (!Number.isFinite(n) || n <= 0) return;
+      price = cents(n);
+      priceAt = wsAt = Date.now();
+      feed = "live";
+    } catch { /* ignore */ }
+  };
+  sock.onclose = () => { if (ws === sock) { ws = null; scheduleReconnect(); } };
+  sock.onerror = () => { try { sock.close(); } catch { /* ignore */ } };
+}
+
+function scheduleReconnect() {
+  if (!running) return;
+  window.clearTimeout(wsTimer);
+  const delay = Math.min(15_000, 500 * 2 ** wsRetry++);
+  wsTimer = window.setTimeout(connectSocket, delay);
+}
+
+function closeSocket() {
+  window.clearTimeout(wsTimer);
+  const s = ws; ws = null;
+  if (s) { s.onclose = null; try { s.close(); } catch { /* ignore */ } }
+}
+
+/** REST fallback: only hits Coinbase when the socket has gone quiet. */
+async function fallbackPoll() {
+  if (Date.now() - wsAt < 1500) return;
+  await pollPrice();
+}
+
 async function pollPrice() {
   try {
     const r = await fetch(`${CB}/ticker`, { cache: "no-store" });
@@ -392,6 +444,7 @@ async function pollPrice() {
 }
 
 let burstOnce = false;
+let visHooked = false;
 function ensureRunning() {
   if (typeof window === "undefined" || running || !isDemoOn()) return;
   running = true;
@@ -401,7 +454,18 @@ function ensureRunning() {
     if (!burstOnce) { burstOnce = true; demoBusySnapshot(); }
     else tickSim(Date.now());
   });
-  pollTimer = window.setInterval(() => void pollPrice(), 2000);
+  connectSocket();
+  pollTimer = window.setInterval(() => void fallbackPoll(), 1000);
+  if (!visHooked && typeof document !== "undefined") {
+    visHooked = true;
+    // background tabs throttle timers: grab a fresh price as soon as the tab is visible again
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible" || !running) return;
+      wsRetry = 0;
+      connectSocket();
+      void pollPrice().then(() => notify());
+    });
+  }
   simTimer = window.setInterval(() => tickSim(Date.now()), 900);
 }
 
@@ -410,6 +474,7 @@ function stop() {
   running = false;
   if (pollTimer) window.clearInterval(pollTimer);
   if (simTimer) window.clearInterval(simTimer);
+  closeSocket();
   pollTimer = simTimer = 0;
 }
 
@@ -548,7 +613,7 @@ export function demoPlace(side: Side, stake: number, code: string): PlaceResult 
   if (!stakesFor(m.lengthMin).includes(stake)) return { ok: false, reason: "rejected" };
   if (s.user.points < stake) return { ok: false, reason: "balance" };
   if (s.calls.some((c) => c.uid === USER_ID && c.code === code)) return { ok: false, reason: "already" };
-  if (!price || Date.now() - priceAt > 8000) return { ok: false, reason: "stale" };
+  if (!price || Date.now() - priceAt > STALE_PRICE_MS) return { ok: false, reason: "stale" };
   place(USER_ID, code, side, stake, now);
   save();
   notify();
