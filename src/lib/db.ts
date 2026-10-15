@@ -1,7 +1,7 @@
 import { pendingMigrations } from "../../scripts/migration-plan.mjs";
 
 /** Which database backend is active. */
-export type DbSource = "neon" | "pglite";
+export type DbSource = "neon" | "pglite" | "d1";
 
 // An empty/whitespace DATABASE_URL (an easy misconfig in deploy UIs) must mean
 // "unset" — otherwise production would silently run on the PGLite fallback.
@@ -16,7 +16,80 @@ const databaseUrl =
  * the app has a working database even with nothing configured — the live preview
  * included. Swap in Neon later by just setting `DATABASE_URL`; no code changes.
  */
-export const dbSource: DbSource = databaseUrl ? "neon" : "pglite";
+// Cloudflare Workers: `PULSE_DB=d1` (wrangler.jsonc vars) selects the D1 binding `DB`.
+const useD1 =
+  typeof process !== "undefined" && process.env?.PULSE_DB?.trim() === "d1";
+export const dbSource: DbSource = useD1 ? "d1" : databaseUrl ? "neon" : "pglite";
+
+/** Minimal D1 surface we use (binding `DB` on Cloudflare Workers). */
+export interface D1Like {
+  prepare(query: string): {
+    bind(...values: unknown[]): { all<T>(): Promise<{ results: T[] }> };
+    all<T>(): Promise<{ results: T[] }>;
+  };
+  batch(statements: unknown[]): Promise<unknown[]>;
+  exec(query: string): Promise<unknown>;
+}
+
+/** Resolve the Workers D1 binding (nitro exposes the env on globalThis.__env__). */
+export async function getD1(): Promise<D1Like> {
+  const g = globalThis as { __env__?: { DB?: D1Like } };
+  if (g.__env__?.DB) return g.__env__.DB;
+  const spec = "cloudflare:workers";
+  const mod = (await import(/* @vite-ignore */ spec)) as { env?: { DB?: D1Like } };
+  if (mod.env?.DB) return mod.env.DB;
+  throw new Error("[db] PULSE_DB=d1 but no D1 binding named DB");
+}
+
+/**
+ * A D1 handle usable at module scope (Better Auth's kysely adapter detects D1 by
+ * `batch`/`exec`/`prepare`). The real binding is resolved per call.
+ */
+export function lazyD1(): D1Like {
+  const pending = (): never => {
+    throw new Error("[db] lazyD1: binding not resolved");
+  };
+  const resolveSync = (): D1Like | undefined =>
+    (globalThis as { __env__?: { DB?: D1Like } }).__env__?.DB;
+  return {
+    prepare: (q: string) => (resolveSync() ?? pending()).prepare(q),
+    batch: async (st: unknown[]) => (await getD1()).batch(st),
+    exec: async (q: string) => (await getD1()).exec(q),
+  };
+}
+
+/**
+ * Translate the Postgres dialect used across the app into SQLite for D1.
+ * Covers: $n placeholders, ::casts, now(), now() - interval, utc ::date,
+ * the market code sequence. Queries that need real restructuring (writable
+ * CTEs, UPDATE … FROM) branch on `dbSource` at the call site instead.
+ */
+export function pgToSqlite(text: string): string {
+  const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+  return text
+    .replace(/\(now\(\) at time zone 'utc'\)::date/g, "date('now')")
+    .replace(/now\(\) - interval '(\d+) (hour|hours|minute|minutes)'/g, (_m, n: string, u: string) =>
+      `strftime('%Y-%m-%dT%H:%M:%fZ','now','-${n} ${u.startsWith("hour") ? "hours" : "minutes"}')`,
+    )
+    .replace(/\bupdate (\w+) (?!set\b|as\b)(\w+)\s/gi, "update $1 as $2 ")
+    .replace(/now\(\)/g, NOW)
+    .replace(/::(int|integer|numeric|text|timestamptz|date)\b/g, "")
+    .replace(/\$(\d+)/g, "?$1");
+}
+
+function createD1Sql(): Promise<Sql> {
+  return Promise.resolve(
+    toSql(async <T>(text: string, params: unknown[]) => {
+      const db = await getD1();
+      const values = params.map((v) =>
+        typeof v === "boolean" ? (v ? 1 : 0) : v instanceof Date ? v.toISOString() : v === undefined ? null : v,
+      );
+      const stmt = db.prepare(pgToSqlite(text));
+      const res = await (values.length ? stmt.bind(...values) : stmt).all<T>();
+      return res.results ?? [];
+    }),
+  );
+}
 
 /**
  * Minimal shared SQL surface, satisfied by both Neon and PGLite. Both the
@@ -176,6 +249,7 @@ async function createSql(): Promise<Sql> {
         "or a server route loader, never from client code.",
     );
   }
+  if (dbSource === "d1") return createD1Sql();
   return dbSource === "neon" ? createNeonSql() : createPgliteSql();
 }
 
@@ -235,4 +309,18 @@ if (typeof window === "undefined" && dbSource === "pglite") {
     console.error("[db] PGLite bootstrap failed:", err);
     throw err;
   });
+}
+
+/**
+ * D1 only: run Postgres-dialect statements atomically in one D1 batch (an
+ * implicit transaction). Returns each statement's rows.
+ */
+export async function d1Batch(statements: Array<[string, unknown[]]>): Promise<unknown[][]> {
+  const db = await getD1();
+  const prepared = statements.map(([text, params]) => {
+    const stmt = db.prepare(pgToSqlite(text));
+    return params.length ? stmt.bind(...params) : stmt;
+  });
+  const out = (await db.batch(prepared)) as Array<{ results?: unknown[] }>;
+  return out.map((r) => r.results ?? []);
 }

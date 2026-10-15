@@ -20,7 +20,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test:demo": "tsx --test scripts/demo.spec.mjs",
-    "build:cf": "NITRO_PRESET=cloudflare_module VITE_PULSE_DEMO=true VITE_AUTH_ENABLED=false vite build",
+    "build:cf": "NITRO_PRESET=cloudflare_module VITE_PULSE_DEMO=true VITE_AUTH_ENABLED=true vite build",
     "preview:cf": "npm run build:cf && wrangler dev",
     "deploy:cf": "npm run build:cf && wrangler deploy"
   },

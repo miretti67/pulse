@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { signIn } from "@/lib/auth/client";
+import { authClient, signIn } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { claimUsername, saveAvatar } from "@/lib/pulse/api";
 import { demoPulse, demoSetAvatar, demoSetUsername, isDemoOn } from "@/lib/pulse/demo";
@@ -222,11 +222,11 @@ export function Welcome({ onDone }: { onDone: () => void }) {
             onSkip={skip}
             onGuest={skip}
             onEmail={() => {
+              setNote("");
               setScreen("email");
-              window.setTimeout(() => {
-                if (screenRef.current === "email") setScreen("username");
-              }, reduced ? 0 : 1800);
             }}
+            onEmailDone={() => setScreen("username")}
+            onBack={() => setScreen("signin")}
             onTelegram={() => setScreen("username")}
             onGoogle={() => {
               try {
@@ -570,7 +570,11 @@ function SignStep({
   onGoogle,
   onTelegram,
   onEmail,
+  onEmailDone,
+  onBack,
 }: {
+  onEmailDone: () => void;
+  onBack: () => void;
   note: string;
   sent: boolean;
   onSkip: () => void;
@@ -597,10 +601,7 @@ function SignStep({
         {isDemoOn() ? <p className="mono sub" data-demo-crowd>DEMO · 1,000 PLAYERS ALREADY IN</p> : null}
       </div>
       {sent ? (
-        <div className="sent">
-          <b>CHECK YOUR INBOX.</b>
-          <p className="sub">The link signs you in.</p>
-        </div>
+        <EmailForm onDone={onEmailDone} onBack={onBack} />
       ) : (
         <div className="stack">
           <button type="button" className="btn" onClick={onGoogle}>
@@ -610,7 +611,7 @@ function SignStep({
             CONTINUE WITH TELEGRAM<span className="ar">→</span>
           </button>
           <button type="button" className="btn" onClick={onEmail}>
-            EMAIL ME A LINK<span className="ar">→</span>
+            CONTINUE WITH EMAIL<span className="ar">→</span>
           </button>
         </div>
       )}
@@ -621,6 +622,64 @@ function SignStep({
       <div style={{ height: 20 }} />
       <p className="footer">POINTS HAVE NO CASH VALUE.</p>
     </section>
+  );
+}
+
+/** Real email + password account (Better Auth, stored in D1 on Workers). */
+function EmailForm({ onDone, onBack }: { onDone: () => void; onBack: () => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  async function go(mode: "up" | "in") {
+    if (busy) return;
+    if (!/^\S+@\S+\.\S+$/.test(email)) return setErr("THAT EMAIL LOOKS OFF.");
+    if (password.length < 8) return setErr("PASSWORD: 8 CHARACTERS, AT LEAST.");
+    setBusy(true);
+    setErr("");
+    const res =
+      mode === "up"
+        ? await authClient.signUp.email({ email, password, name: email.split("@")[0] || "Member" })
+        : await authClient.signIn.email({ email, password });
+    setBusy(false);
+    if (res.error) {
+      const code = res.error.code ?? "";
+      setErr(
+        code.includes("EXISTS")
+          ? "THAT EMAIL HAS AN ACCOUNT. SIGN IN."
+          : code.includes("INVALID")
+            ? "EMAIL OR PASSWORD IS WRONG."
+            : "COULD NOT SIGN IN. TRY AGAIN.",
+      );
+      return;
+    }
+    onDone();
+  }
+  return (
+    <form
+      className="stack"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void go("up");
+      }}
+    >
+      <label className="field">
+        <input type="email" autoComplete="email" placeholder="EMAIL" value={email} onChange={(e) => setEmail(e.target.value.trim())} />
+      </label>
+      <label className="field">
+        <input type="password" autoComplete="current-password" placeholder="PASSWORD" value={password} onChange={(e) => setPassword(e.target.value)} />
+      </label>
+      <button type="submit" className="btn" disabled={busy}>
+        CREATE ACCOUNT<span className="ar">→</span>
+      </button>
+      <button type="button" className="btn" disabled={busy} onClick={() => void go("in")}>
+        SIGN IN<span className="ar">→</span>
+      </button>
+      {err ? <p className="note">{err}</p> : null}
+      <button type="button" className="link" style={{ alignSelf: "flex-start" }} onClick={onBack}>
+        BACK
+      </button>
+    </form>
   );
 }
 

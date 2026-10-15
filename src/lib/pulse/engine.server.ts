@@ -1,4 +1,4 @@
-import { getSql, type Sql } from "@/lib/db";
+import { d1Batch, dbSource, getSql, type Sql } from "@/lib/db";
 import { cents, estimateReturn, LENGTHS, shareOfPool, stakesFor, windowBounds, type LengthMin, type Side } from "./math";
 import { AVATARS, type AvatarId } from "./types";
 import type {
@@ -226,10 +226,17 @@ export async function ensureProfile(
     let code = codeFrom(userId);
     for (let i = 0; i < 5; i += 1) {
       try {
-        await sql`
-          insert into profiles (user_id, display_name, username, image, referral_code)
-          values (${userId}, ${name}, ${username}, ${image}, ${code})
-        `;
+        if (dbSource === "d1") {
+          await sql`
+            insert into profiles (user_id, member_no, display_name, username, image, referral_code)
+            values (${userId}, (select coalesce(max(member_no), 0) + 1 from profiles), ${name}, ${username}, ${image}, ${code})
+          `;
+        } else {
+          await sql`
+            insert into profiles (user_id, display_name, username, image, referral_code)
+            values (${userId}, ${name}, ${username}, ${image}, ${code})
+          `;
+        }
         break;
       } catch {
         username = `${usernameFrom(name, userId).slice(0, 12)}${i}${code.slice(0, 2)}`.slice(0, 16);
@@ -266,6 +273,26 @@ async function attachReferral(sql: Sql, userId: string, raw: string): Promise<vo
 }
 
 async function refund(sql: Sql, marketId: number, outcome: "draw" | "void" | "cancelled"): Promise<void> {
+  if (dbSource === "d1") {
+    // SQLite has no writable CTEs: credit then mark, atomically in one batch.
+    await d1Batch([
+      [
+        `update profiles
+         set prediction_points = prediction_points + coalesce((
+           select sum(p.stake) from positions p
+           where p.market_id = $1 and p.outcome is null and p.user_id = profiles.user_id
+         ), 0)
+         where user_id in (select user_id from positions where market_id = $1 and outcome is null)`,
+        [marketId],
+      ],
+      [
+        `update positions set outcome = $2, payout = stake, net = 0
+         where market_id = $1 and outcome is null`,
+        [marketId, outcome],
+      ],
+    ]);
+    return;
+  }
   await sql`
     with claimed as (
       update positions
@@ -281,6 +308,34 @@ async function refund(sql: Sql, marketId: number, outcome: "draw" | "void" | "ca
 }
 
 async function paySides(sql: Sql, marketId: number, win: Side): Promise<void> {
+  if (dbSource === "d1") {
+    const pools = await poolsFor(sql, marketId);
+    const winPool = win === "up" ? pools.upPool : pools.downPool;
+    const losePool = win === "up" ? pools.downPool : pools.upPool;
+    if (winPool <= 0 || losePool <= 0) return;
+    // Integer division of non-negatives == floor(stake / winPool * losePool).
+    const gain = "(p.stake * $3 / $2)";
+    await d1Batch([
+      [
+        `update profiles
+         set prediction_points = prediction_points + coalesce((
+           select sum(p.stake + ${gain}) from positions p
+           where p.market_id = $1 and p.outcome is null and p.side = $4 and p.user_id = profiles.user_id
+         ), 0)
+         where user_id in (select user_id from positions where market_id = $1 and outcome is null and side = $4)`,
+        [marketId, winPool, losePool, win],
+      ],
+      [
+        `update positions as p
+         set outcome = case when p.side = $4 then 'win' else 'loss' end,
+             net = case when p.side = $4 then ${gain} else -p.stake end,
+             payout = case when p.side = $4 then p.stake + ${gain} else 0 end
+         where p.market_id = $1 and p.outcome is null`,
+        [marketId, winPool, losePool, win],
+      ],
+    ]);
+    return;
+  }
   await sql`
     with pools as (
       select
@@ -434,6 +489,24 @@ async function ensureMarket(
 ) {
   if (quote.open == null) return;
   const status = Date.now() >= bounds.locks ? "locked" : "open";
+  if (dbSource === "d1") {
+    const opensIso = new Date(bounds.opens).toISOString();
+    const exists = await sql`select 1 from markets where length_min = ${length} and opens_at = ${opensIso} limit 1`;
+    if (exists.length) return;
+    const seq = await sql<{ id: number }>`insert into market_code_seq (at) values (${opensIso}) returning id`;
+    await sql`
+      insert into markets (code, opens_at, locks_at, closes_at, status, open_price, price_source, length_min)
+      values (
+        ${"MKT_" + String(num(seq[0]?.id)).padStart(5, "0")},
+        ${opensIso},
+        ${new Date(bounds.locks).toISOString()},
+        ${new Date(bounds.closes).toISOString()},
+        ${status}, ${cents(quote.open)}, ${quote.source}, ${length}
+      )
+      on conflict do nothing
+    `;
+    return;
+  }
   await sql`
     insert into markets (code, opens_at, locks_at, closes_at, status, open_price, price_source, length_min)
     select
@@ -784,7 +857,7 @@ export async function placeCall(userId: string, side: Side, stake: number, code:
   const length = asLength(markets[0].length_min);
   if (!stakesFor(length).includes(stake)) return { ok: false, reason: "rejected" };
   const marketId = num(markets[0].id);
-  const rows = await sql<{ prediction_points: number }>`
+  const rows = dbSource === "d1" ? await placeD1(userId, marketId, side, stake) : await sql<{ prediction_points: number }>`
     with ins as (
       insert into positions (market_id, user_id, side, stake)
       select ${marketId}, ${userId}, ${side}, ${stake}
@@ -1023,4 +1096,25 @@ export async function setAvatar(userId: string, avatar: string): Promise<{ ok: b
   await ensureProfile(userId);
   await sql`update profiles set avatar = ${avatar} where user_id = ${userId}`;
   return { ok: true };
+}
+
+/** D1 version of placeCall's writable CTE: insert the call, then debit only if it landed. */
+async function placeD1(userId: string, marketId: number, side: Side, stake: number): Promise<Array<{ prediction_points: number }>> {
+  const [, debit] = await d1Batch([
+    [
+      `insert into positions (market_id, user_id, side, stake)
+       select $1, $2, $3, $4
+       where exists (select 1 from profiles p where p.user_id = $2 and p.prediction_points >= $4)
+         and exists (select 1 from markets m where m.id = $1 and m.status = 'open' and m.locks_at > now())
+       on conflict (market_id, user_id) do nothing`,
+      [marketId, userId, side, stake],
+    ],
+    [
+      `update profiles set prediction_points = prediction_points - $2
+       where user_id = $1 and changes() = 1
+       returning prediction_points`,
+      [userId, stake],
+    ],
+  ]);
+  return debit as Array<{ prediction_points: number }>;
 }

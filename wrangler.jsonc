@@ -1,6 +1,5 @@
 // Cloudflare Workers + static assets. Built by `npm run build:cf` (Nitro cloudflare_module preset).
-// Demo mode is baked ON (VITE_PULSE_DEMO=true) and auth OFF, so the preview needs no database:
-// the simulator runs client-side; server functions fail gracefully.
+// Demo mode stays available (client-side simulator, default ON); auth is ON and backed by D1.
 {
   "name": "pulse",
   "main": ".output/server/index.mjs",
@@ -9,6 +8,20 @@
   "no_bundle": true,
   "rules": [{ "type": "ESModule", "globs": ["**/*.mjs", "**/*.js"] }],
   "assets": { "binding": "ASSETS", "directory": ".output/public" },
-  "vars": { "VITE_PULSE_DEMO": "true", "VITE_AUTH_ENABLED": "false" },
+  "vars": {
+    "VITE_PULSE_DEMO": "true",
+    "VITE_AUTH_ENABLED": "true",
+    "PULSE_DB": "d1",
+    "BETTER_AUTH_URL": "https://pulse.miretti67.workers.dev"
+  },
+  // Real accounts + server markets live in D1. BETTER_AUTH_SECRET is a Worker secret (wrangler secret put).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pulse-db",
+      "database_id": "fb500332-a969-4e64-922f-2289b23391ff",
+      "migrations_dir": "migrations-d1"
+    }
+  ],
   "workers_dev": true
 }
