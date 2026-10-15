@@ -8,6 +8,12 @@ export const LENGTHS: LengthMin[] = [1, 5, 15];
 export const WINDOW_MS = 15 * 60 * 1000;
 export const LOCK_LEAD_MS = 60 * 1000;
 
+/** Lock lead per market length: calls close this long before the market closes.
+ * 1M takes calls for 45s, 5M for 4m, 15M for 12m. The next market opens the instant one closes. */
+export function lockLeadMs(length: LengthMin): number {
+  return length === 1 ? 15_000 : length === 5 ? 60_000 : 180_000;
+}
+
 export type Side = "up" | "down";
 
 export function stakesFor(length: LengthMin): readonly number[] {
@@ -42,7 +48,7 @@ export function windowBounds(now: number, length: LengthMin = 15): {
   length: LengthMin;
 } {
   const span = length * 60 * 1000;
-  const lead = length === 1 ? 15_000 : LOCK_LEAD_MS;
+  const lead = lockLeadMs(length);
   const opens = Math.floor(now / span) * span;
   return { opens, locks: opens + span - lead, closes: opens + span, length };
 }

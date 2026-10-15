@@ -345,3 +345,6 @@ body:has([data-intro-cover]) nav[aria-label="Primary"] {
 .pi .s-land .tap { text-align: center; }
 .pi .s-avatar .chip { font: 600 10px/1 var(--font-mono, monospace); letter-spacing: .12em; padding: 8px 10px; border: 1px solid #2A2A2A; color: #8A8A8A; background: transparent; }
 .pi .s-avatar .chip.on { border-color: #F2F2F2; color: #F2F2F2; }
+
+/* Static landing: only for non-JS readers and link previews. */
+html.js #pulse-static { display: none; }

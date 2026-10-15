@@ -4,7 +4,7 @@
  * Markets settle on real Coinbase BTC. Demo stats never mix with real-mode data.
  */
 import { AVATARS, type AvatarId, type ActivityItem, type Feed, type HistoryDetail, type HistoryRow, type MarketSnap, type PlaceResult, type ProfileSnap, type PulseSnapshot, type RankSnap, type SettledCall } from "./types";
-import { LENGTHS, cents, estimateReturn, shareOfPool, stakesFor, windowBounds, type LengthMin, type Side } from "./math";
+import { LENGTHS, lockLeadMs, cents, estimateReturn, shareOfPool, stakesFor, windowBounds, type LengthMin, type Side } from "./math";
 
 export const DEMO_FLAG = "pulse-demo";
 export const DEMO_ENV = typeof import.meta !== "undefined" && (import.meta as { env?: Record<string, string> }).env?.VITE_PULSE_DEMO === "true";
@@ -136,7 +136,7 @@ function backfillHistory(s: Store, seed: number) {
     for (const length of LENGTHS) {
       const span = length * 60_000;
       const opens = Math.floor(now / span) * span - step * span;
-      const lead = length === 1 ? 15_000 : 60_000;
+      const lead = lockLeadMs(length);
       const m: Mkt = {
         code: codeFor(length, opens),
         lengthMin: length,
@@ -227,6 +227,12 @@ function ensureMarkets(now: number) {
     }
     if (now >= m.closesAt && m.status !== "settled") settleMarket(m, now);
     else if (now >= m.locksAt && m.status === "open") m.status = "locked";
+  }
+  // Settle every past market, not just the current window's. Previously only the market for the
+  // current window was checked, so once a new window opened, the old one (holding the user's call)
+  // was never settled and the UI sat on VERIFYING RESULT forever.
+  for (const m of s.markets) {
+    if (m.status !== "settled" && now >= m.closesAt) settleMarket(m, now);
   }
   // keep last ~8 of each length
   for (const length of LENGTHS) {

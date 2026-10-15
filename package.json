@@ -19,7 +19,7 @@
     "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/preview-path-prefix.test.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "test:demo": "tsx --test scripts/demo.spec.mjs",
+    "test:demo": "tsx --test scripts/demo.spec.mjs scripts/demo-settle.spec.mjs",
     "build:cf": "NITRO_PRESET=cloudflare_module VITE_PULSE_DEMO=true VITE_AUTH_ENABLED=true vite build",
     "preview:cf": "npm run build:cf && wrangler dev",
     "deploy:cf": "npm run build:cf && wrangler deploy"

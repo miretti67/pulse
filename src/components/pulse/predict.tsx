@@ -69,6 +69,9 @@ function useCrowdMotion(participants: number, upPool: number, downPool: number, 
 
 const INTRO_KEY = "pulse-intro-v3";
 const SIDE_KEY = "pulse-last-side";
+// Module-level: survives in-app navigation (PredictScreen unmounts/remounts) but resets on a real
+// page load. The butterfly loader and intro only ever play once per app load.
+let bootDone = false;
 
 export function PredictScreen() {
   const { user, isPending } = useCurrentUserState();
@@ -80,10 +83,11 @@ export function PredictScreen() {
     refetchInterval: demo ? 1000 : 2000,
   });
   const opened = useRef(0);
-  const released = useRef(false);
+  const released = useRef(bootDone);
   // null = not read yet (SSR / first paint): show the welcome so nothing else ever flashes first.
-  const [intro, setIntro] = useState<boolean | null>(null);
-  const [cover, setCover] = useState<"on" | "out" | "off">("on");
+  // Returning via in-app navigation skips both the welcome and the butterfly cover.
+  const [intro, setIntro] = useState<boolean | null>(bootDone ? false : null);
+  const [cover, setCover] = useState<"on" | "out" | "off">(bootDone ? "off" : "on");
   const [slow, setSlow] = useState(false);
   const [tint, setTint] = useState<"none" | "up" | "down">("none");
   const [stuck, setStuck] = useState(false);
@@ -91,7 +95,7 @@ export function PredictScreen() {
   useEffect(() => {
     opened.current = performance.now();
     try {
-      setIntro(localStorage.getItem(INTRO_KEY) !== "1");
+      if (!bootDone) setIntro(localStorage.getItem(INTRO_KEY) !== "1");
       const saved = localStorage.getItem(SIDE_KEY);
       if (saved === "up" || saved === "down") setTint(saved);
     } catch {
@@ -132,6 +136,7 @@ export function PredictScreen() {
   }, [intro, ready, reduced]);
 
   useEffect(() => {
+    if (cover === "off") bootDone = true;
     if (cover !== "out") return;
     const t = window.setTimeout(() => setCover("off"), reduced ? 0 : 420);
     return () => window.clearTimeout(t);
@@ -245,7 +250,8 @@ function PredictBody({
     return <StatusArt src="/pulse/signal.jpg" kicker="MARKET UNAVAILABLE" title="NO SIGNAL." action={null} />;
   }
 
-  if (snap.settling) {
+  const settleOverdue = snap.settling ? serverNow - Date.parse(snap.settling.closesAt) > 20_000 : false;
+  if (snap.settling && !(settleOverdue && dismissed === `settling:${snap.settling.code}`)) {
     return (
       <section>
         <Header points={snap.me?.points ?? null} inPlay={snap.me?.inPlay ?? 0} authPending={authPending} signedIn={signedIn} market={market} />
@@ -262,6 +268,16 @@ function PredictBody({
             ) : null}
             {snap.settling.source ? (
               <p className="mt-2 font-mono text-meta text-muted">{snap.settling.source}</p>
+            ) : null}
+            {settleOverdue ? (
+              <button
+                type="button"
+                data-settle-skip
+                onClick={() => setDismissed(`settling:${snap.settling!.code}`)}
+                className="mt-6 h-11 w-full border border-line font-mono text-meta text-fg"
+              >
+                STILL CHECKING THE PRICE. KEEP PLAYING · RESULT LANDS IN HISTORY
+              </button>
             ) : null}
           </div>
         </div>
@@ -333,6 +349,7 @@ function LiveMarket({
   const [lit, setLit] = useState<number | null>(null);
   const [replay, setReplay] = useState(false);
   const [chart, setChart] = useState(false);
+  const [details, setDetails] = useState(false);
   const stageRef = useRef<HTMLElement>(null);
   const fxRef = useRef<HTMLCanvasElement>(null);
   const frozen = useRef<MarketSnap | null>(null);
@@ -466,6 +483,7 @@ function LiveMarket({
         onReplay={() => setReplay(true)}
       />
       <DemoBadge /><MarketRows markets={markets} length={length} onLength={onLength} serverNow={serverNow} holds={snap.me?.holds ?? []} />
+      <StatusPanel market={market} lockMs={lockMs} closeMs={closeMs} />
       <div className="md:grid md:grid-cols-2 md:items-start md:gap-12">
       <div>
       <div className="relative mt-5">
@@ -498,6 +516,8 @@ function LiveMarket({
         </p>
       </div>
 
+      {details ? (
+      <>
       <div className="mt-6">
         <p className="font-mono text-meta text-secondary">MARKET CLOSE</p>
         <TickText value={formatClock(closeMs)} className={`text-clock ${urgent ? "text-pulse" : "text-fg"}`} />
@@ -515,6 +535,8 @@ function LiveMarket({
           {snap.feed === "reconnecting" ? "RECONNECTING" : market.source ?? ""}
         </span>
       </div>
+      </>
+      ) : null}
       <p className="sr-only" aria-live="polite">
         {announce}
       </p>
@@ -538,11 +560,13 @@ function LiveMarket({
             : `${crowd.count.toLocaleString("en-US")} IN · ${Math.round(upPct)}% OF POOL UP`}
           {total > 0 && shown.participants < 5 ? " · SMALL POOL" : ""}
         </p>
+        {details ? (
         <dl className="mt-4 grid grid-cols-3 gap-2 border-t border-line-soft pt-3">
           <PoolStat label="UP ↑" value={formatPts(shown.upPool)} />
           <PoolStat label="DOWN ↓" value={formatPts(shown.downPool)} />
           <PoolStat label="TOTAL" value={formatPts(total)} />
         </dl>
+        ) : null}
       </div>
       </div>
 
@@ -581,6 +605,7 @@ function LiveMarket({
               setStake(next);
             }}
             length={length}
+            lockMs={lockMs}
             stale={stale}
             onSubmit={() => void submit()}
           />
@@ -591,6 +616,16 @@ function LiveMarket({
       </div>
       </div>
 
+      <button
+        type="button"
+        data-details-toggle
+        aria-expanded={details}
+        onClick={() => setDetails((d) => !d)}
+        className="mt-8 h-11 w-full border border-line font-mono text-meta text-secondary"
+      >
+        {details ? "HIDE DETAILS ▴" : "SHOW DETAILS ▾"}
+      </button>
+      {details ? (
       <div className="mt-8 pb-4">
         <Mark n="03" label="LIVE" />
         {activity.length === 0 ? (
@@ -612,6 +647,7 @@ function LiveMarket({
           </ul>
         )}
       </div>
+      ) : null}
     </section>
   );
 }
@@ -754,6 +790,41 @@ function MarketRows({
   );
 }
 
+function shortClock(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** Beginner summary: one big status, one countdown, both pots, one line. */
+function StatusPanel({ market, lockMs, closeMs }: { market: MarketSnap; lockMs: number; closeMs: number }) {
+  const status = market.status === "settled" || closeMs <= 0 ? "SETTLED" : market.status === "open" && lockMs > 0 ? "OPEN" : "LOCKED";
+  const tone = status === "OPEN" ? "text-up" : status === "LOCKED" ? "text-pulse" : "text-fg";
+  return (
+    <div data-status-panel className="mt-5 border border-line px-4 py-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <p data-status className={`font-display text-4xl font-bold leading-none tracking-tight ${tone}`}>{status}</p>
+        <p className="text-right font-mono text-meta text-secondary">
+          {status === "OPEN" ? "CALLS CLOSE IN" : status === "LOCKED" ? "RESULT IN" : "NEXT ROUND"}
+          <span className="block font-display text-2xl tabular-nums text-fg">
+            {status === "OPEN" ? shortClock(lockMs) : status === "LOCKED" ? shortClock(closeMs) : "NOW"}
+          </span>
+        </p>
+      </div>
+      <dl className="mt-4 grid grid-cols-2 gap-2">
+        <div className="border-l-2 border-up pl-3">
+          <dt className="font-mono text-meta text-secondary">UP POT</dt>
+          <dd className="font-display text-xl tabular-nums text-up">{market.upPool.toLocaleString("en-US")}</dd>
+        </div>
+        <div className="border-l-2 border-down pl-3">
+          <dt className="font-mono text-meta text-secondary">DOWN POT</dt>
+          <dd className="font-display text-xl tabular-nums text-fg">{market.downPool.toLocaleString("en-US")}</dd>
+        </div>
+      </dl>
+      <p className="mt-3 font-mono text-meta text-fg">Pick a side. Winners split the pot.</p>
+    </div>
+  );
+}
+
 function PoolStat({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -776,6 +847,7 @@ function CallForm({
   onSide,
   onStake,
   length,
+  lockMs,
   stale,
   onSubmit,
 }: {
@@ -791,9 +863,11 @@ function CallForm({
   onSide: (s: Side) => void;
   onStake: (n: number) => void;
   length: LengthMin;
+  lockMs: number;
   stale: boolean;
   onSubmit: () => void;
 }) {
+  const left = locked ? null : shortClock(lockMs);
   const total = market.upPool + market.downPool;
   const upPct = total > 0 ? Math.round((market.upPool / total) * 100) : null;
   const downPct = upPct == null ? null : 100 - upPct;
@@ -804,6 +878,7 @@ function CallForm({
           side="up"
           pct={upPct}
           pool={market.upPool}
+          left={left}
           selected={side === "up"}
           disabled={locked}
           onClick={() => onSide("up")}
@@ -812,6 +887,7 @@ function CallForm({
           side="down"
           pct={downPct}
           pool={market.downPool}
+          left={left}
           selected={side === "down"}
           disabled={locked}
           onClick={() => onSide("down")}
@@ -872,6 +948,7 @@ function SideButton({
   side,
   pct,
   pool,
+  left,
   selected,
   disabled,
   onClick,
@@ -879,6 +956,7 @@ function SideButton({
   side: Side;
   pct: number | null;
   pool: number;
+  left: string | null;
   selected: boolean;
   disabled: boolean;
   onClick: () => void;
@@ -908,7 +986,10 @@ function SideButton({
           {up ? " ↑" : " ↓"}
         </span>
       </span>
-      <span className={`mt-3 block font-mono text-meta ${selected && up ? "text-bg" : "text-secondary"}`}>
+      <span data-call-countdown className={`mt-2 block font-mono text-meta ${selected && up ? "text-bg" : "text-fg"}`}>
+        {left ? `CALL ${up ? "UP" : "DOWN"} · ${left} LEFT` : "LOCKED"}
+      </span>
+      <span className={`mt-1 block font-mono text-meta ${selected && up ? "text-bg" : "text-secondary"}`}>
         {pct == null ? "—" : `${pct}%`} · {pool.toLocaleString("en-US")}
       </span>
       {selected ? (
