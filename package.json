@@ -22,7 +22,8 @@
     "test:demo": "tsx --test scripts/demo.spec.mjs scripts/demo-settle.spec.mjs",
     "build:cf": "NITRO_PRESET=cloudflare_module VITE_PULSE_DEMO=true VITE_AUTH_ENABLED=true vite build",
     "preview:cf": "npm run build:cf && wrangler dev",
-    "deploy:cf": "npm run build:cf && wrangler deploy"
+    "deploy:cf": "npm run build:cf && wrangler deploy",
+    "deploy:scroll-preview": "npm run build:cf && wrangler deploy --config wrangler.scroll-preview.jsonc"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",
