@@ -87,7 +87,8 @@ function StaticLanding() {
 
 function Frame() {
   const path = useRouterState({ select: (s) => s.location.pathname });
-  if (path === "/login") return <Outlet />;
+  // Marketing landing and login are full-bleed; the app shell stays on predict/history/rank/me.
+  if (path === "/login" || path === "/welcome") return <Outlet />;
   return (
     <Shell>
       <Outlet />

@@ -1,0 +1,17 @@
+// Preview-only worker for the scroll landing. Different name from production ("pulse").
+// No D1 binding, so this deploy cannot touch production data.
+{
+  "name": "pulse-scroll-landing",
+  "main": ".output/server/index.mjs",
+  "compatibility_date": "2025-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "no_bundle": true,
+  "rules": [{ "type": "ESModule", "globs": ["**/*.mjs", "**/*.js"] }],
+  "assets": { "binding": "ASSETS", "directory": ".output/public" },
+  "vars": {
+    "VITE_PULSE_DEMO": "true",
+    "VITE_AUTH_ENABLED": "false",
+    "PULSE_DB": "memory",
+  },
+  "workers_dev": true,
+}
